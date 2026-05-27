@@ -1,39 +1,106 @@
-# OS
+# ---- OS ----
 .DS_Store
 Thumbs.db
 desktop.ini
+ehthumbs.db
 
-# Editors
-.vscode/
+# ---- Editors / IDEs ----
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 .idea/
 *.swp
+*.swo
 *~
 
-# Env / secrets
+# ---- Secrets / env ----
 .env
 .env.local
 .env.*.local
 *.pem
 *.key
 
-# Logs
+# ---- Logs ----
 *.log
+logs/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# Dependencies
+# ---- Node ----
 node_modules/
+.npm/
+.pnp.*
+.yarn/cache
+.yarn/install-state.gz
+.eslintcache
+.cache/
+.parcel-cache/
+.next/
+.nuxt/
+.svelte-kit/
+.vite/
+
+# ---- Electron / electron-vite / electron-builder ----
+out/
+dist/
+dist-electron/
+release/
+build/
+*.exe
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+*.snap
+*.zip
+*.app
+*.blockmap
+
+# ---- Python ----
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.installed.cfg
+*.egg
+MANIFEST
+pip-wheel-metadata/
+share/python-wheels/
+.python-version
+
+# Virtualenvs
 .venv/
 venv/
+env/
+ENV/
 
-# Build output
-dist/
-build/
-out/
-*.egg-info/
+# Testing / coverage
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
 
-# Claude Code
+# Jupyter
+.ipynb_checkpoints/
+
+# mypy / pyright / ruff
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+
+# ---- Claude Code ----
 .claude/settings.local.json

@@ -1,0 +1,26 @@
+appId: com.mixcoach.app
+productName: MixCoach
+directories:
+  buildResources: build
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+extraResources:
+  - from: python
+    to: python
+    filter:
+      - '**/*'
+      - '!__pycache__'
+      - '!**/__pycache__/**'
+      - '!.venv'
+      - '!.venv/**'
+win:
+  target: nsis
+mac:
+  target: dmg
+linux:
+  target: AppImage

@@ -1,0 +1,5 @@
+# Pin actual versions once you know what you need.
+# Common starting set for audio coaching work:
+# librosa
+# numpy
+# soundfile
