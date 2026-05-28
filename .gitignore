@@ -81,6 +81,8 @@ share/python-wheels/
 venv/
 env/
 ENV/
+python.venv/
+python/python/
 
 # Testing / coverage
 .pytest_cache/
@@ -101,6 +103,9 @@ coverage.xml
 .pyre/
 .pytype/
 .ruff_cache/
+
+# ---- TS build info ----
+*.tsbuildinfo
 
 # ---- Claude Code ----
 .claude/settings.local.json

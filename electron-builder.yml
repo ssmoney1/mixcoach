@@ -18,6 +18,10 @@ extraResources:
       - '!**/__pycache__/**'
       - '!.venv'
       - '!.venv/**'
+  - from: prompts
+    to: prompts
+    filter:
+      - '**/*'
 win:
   target: nsis
 mac:

@@ -4,10 +4,93 @@
     <meta charset="UTF-8" />
     <title>MixCoach</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:;"
+    />
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <div class="app-shell">
+      <!-- ─── HEADER ─────────────────────────────────────────────── -->
+      <header class="app-header">
+        <div class="header-left">
+          <div id="mode-bar" class="mode-bar" role="radiogroup" aria-label="Analysis mode">
+            <button class="mode-opt" data-mode="vocal" role="radio" aria-checked="false" title="Solo'd vocal — focus on clarity, mud, sibilance, presence">Vocal</button>
+            <button class="mode-opt" data-mode="beat" role="radio" aria-checked="false" title="Instrumental only — focus on low-end, transients, headroom">Beat</button>
+            <button class="mode-opt active" data-mode="both" role="radio" aria-checked="true" title="Full mix — vocal + beat together">Both</button>
+          </div>
+        </div>
+
+        <div class="header-center">
+          <div id="meter" class="meter" title="System audio level (WASAPI loopback)">
+            <div class="meter-label">audio</div>
+            <div class="meter-track">
+              <div id="meter-fill" class="meter-fill"></div>
+              <div id="meter-peak" class="meter-peak"></div>
+            </div>
+            <div id="meter-value" class="meter-value">—</div>
+          </div>
+        </div>
+
+        <div class="header-right">
+          <button id="btn-trigger" class="btn-primary" title="Run analysis (Ctrl+Alt+M)">ANALYZE</button>
+          <div class="brand">
+            <div class="brand-name">MIXCOACH</div>
+            <div class="brand-sub">v0.1.0 dev</div>
+          </div>
+          <button id="btn-close" class="icon" title="Hide">×</button>
+        </div>
+      </header>
+
+      <!-- ─── BODY (sidebar + main) ──────────────────────────────── -->
+      <div class="app-body">
+        <!-- Sidebar -->
+        <nav class="app-sidebar" aria-label="Sections">
+          <ul class="nav-list">
+            <li><button class="nav-item active" data-tab="dashboard">
+              <span class="nav-icon">▣</span><span class="nav-label">Dashboard</span>
+            </button></li>
+            <li><button class="nav-item" data-tab="ai">
+              <span class="nav-icon">◌</span><span class="nav-label">AI Analysis</span>
+            </button></li>
+            <li><button class="nav-item" data-tab="chain">
+              <span class="nav-icon">⇄</span><span class="nav-label">Chain Edits</span>
+            </button></li>
+            <li><button class="nav-item" data-tab="chat">
+              <span class="nav-icon">▢</span><span class="nav-label">Chat</span>
+            </button></li>
+            <li><button class="nav-item" data-tab="keybpm">
+              <span class="nav-icon">♫</span><span class="nav-label">Key &amp; BPM</span>
+            </button></li>
+            <li><button class="nav-item" data-tab="compare">
+              <span class="nav-icon">⇆</span><span class="nav-label">Compare</span>
+            </button></li>
+          </ul>
+
+          <div class="sidebar-status">
+            <div class="status-dot online"></div>
+            <div class="status-lines">
+              <div class="status-line">SYSTEM ONLINE</div>
+              <div class="status-line dim" id="sidebar-last-run">No analysis yet.</div>
+            </div>
+          </div>
+        </nav>
+
+        <!-- Main content -->
+        <main class="app-main" id="app-main">
+          <div class="main-breadcrumb">
+            <span class="bc-root">MIXCOACH</span>
+            <span class="bc-sep">/</span>
+            <span class="bc-section" id="bc-section">DASHBOARD</span>
+          </div>
+
+          <!-- The actual tab content lives here. JS swaps it. -->
+          <div id="tab-content" class="tab-content"></div>
+        </main>
+      </div>
+    </div>
+
+    <script type="module" src="./app.js"></script>
   </body>
 </html>
