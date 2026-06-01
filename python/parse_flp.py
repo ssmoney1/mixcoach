@@ -41,6 +41,39 @@ def _projects_dirs() -> list[Path]:
     return dirs
 
 
+def _get_fl_project_name_from_window() -> str | None:
+    """Return the project name FL Studio currently has open, read from its window title.
+
+    FL Studio sets its window title to "FL Studio <ver> - <ProjectName>" when a
+    project is loaded.  We query the running process via PowerShell so we never
+    need a third-party dependency.  Returns None if FL Studio is not running, has
+    nothing open, or if the subprocess call fails for any reason.
+    """
+    try:
+        import subprocess
+        result = subprocess.run(
+            [
+                "powershell", "-NoProfile", "-Command",
+                "Get-Process -Name 'fl64','FL Studio','fl' -ErrorAction SilentlyContinue "
+                "| Select-Object -ExpandProperty MainWindowTitle -First 1",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+        )
+        title = result.stdout.strip()
+        if not title or "(Untitled)" in title:
+            return None
+        # "FL Studio 21 - ProjectName" → take everything after the last " - "
+        project = title.rsplit(" - ", 1)[-1].strip()
+        if project.lower().endswith(".flp"):
+            project = project[:-4]
+        return project or None
+    except Exception:
+        return None
+
+
 def _newest_flp(roots: list[Path]) -> Path | None:
     candidates: list[Path] = []
     for root in roots:
@@ -48,6 +81,15 @@ def _newest_flp(roots: list[Path]) -> Path | None:
             candidates.extend(root.rglob("*.flp"))
     if not candidates:
         return None
+
+    # Prefer whichever project FL Studio currently has open over newest-modified.
+    project_name = _get_fl_project_name_from_window()
+    if project_name:
+        norm = project_name.lower().replace("_", " ").replace("-", " ")
+        for flp in candidates:
+            if flp.stem.lower().replace("_", " ").replace("-", " ") == norm:
+                return flp
+
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 

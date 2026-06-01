@@ -302,9 +302,10 @@ function formatReferenceBlock(
 
 type ChainInsert = NonNullable<FlpData['mixer']>[number]
 
-// Extract the configured vocal-chain inserts from a parsed FLP, returning
-// them in the same order as VOCAL_CHAIN_BUSES. Missing inserts are
-// reported as null so the prompt can flag them explicitly.
+// Extract the vocal-chain inserts from a parsed FLP.
+// First tries VOCAL_CHAIN_BUSES; if none of those channels have plugins,
+// falls back to auto-detecting every insert that has at least one plugin
+// (excluding the special iid ≤ 0 channels like Master and "current").
 export function extractVocalChain(
   flp: FlpData | null,
   buses: number[] = VOCAL_CHAIN_BUSES
@@ -312,7 +313,19 @@ export function extractVocalChain(
   if (!flp || !flp.ok || !flp.mixer) return buses.map((bus) => ({ bus, insert: null }))
   const byIndex = new Map<number, ChainInsert>()
   for (const ins of flp.mixer) byIndex.set(ins.index, ins)
-  return buses.map((bus) => ({ bus, insert: byIndex.get(bus) ?? null }))
+
+  const configured = buses.map((bus) => ({ bus, insert: byIndex.get(bus) ?? null }))
+  const hasPlugins = configured.some((c) => c.insert?.plugins?.length)
+  if (hasPlugins) return configured
+
+  // Auto-detect: every regular insert (iid > 0) that has at least one plugin,
+  // sorted by channel number so the signal flow reads left-to-right.
+  const active = flp.mixer
+    .filter((ins) => ins.index > 0 && Array.isArray(ins.plugins) && ins.plugins.length > 0)
+    .sort((a, b) => a.index - b.index)
+
+  if (active.length === 0) return configured
+  return active.map((ins) => ({ bus: ins.index, insert: ins }))
 }
 
 function formatVocalChain(
