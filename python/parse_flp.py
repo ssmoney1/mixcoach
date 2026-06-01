@@ -402,7 +402,8 @@ def _extract_mixer(project: Any) -> tuple[list[dict[str, Any]], list[dict[str, A
         return [], []
 
     for idx, insert in enumerate(insert_iter):
-        name = _try_get(insert, "name", None) or f"Insert {idx}"
+        insert_idx = _try_get(insert, "iid", idx)
+        name = _try_get(insert, "name", None) or f"Insert {insert_idx}"
         volume = _safe_float(_try_get(insert, "volume", None))
         pan = _safe_float(_try_get(insert, "pan", None))
         enabled = _try_get(insert, "enabled", True)
@@ -410,7 +411,7 @@ def _extract_mixer(project: Any) -> tuple[list[dict[str, Any]], list[dict[str, A
 
         inserts.append(
             {
-                "index": idx,
+                "index": insert_idx,
                 "name": _safe_str(name),
                 "volume": volume,
                 "pan": pan,
@@ -440,7 +441,7 @@ def _extract_mixer(project: Any) -> tuple[list[dict[str, Any]], list[dict[str, A
                 continue
             sends.append(
                 {
-                    "from": idx,
+                    "from": insert_idx,
                     "to": int(dest_idx),
                     "volume": _safe_float(_try_get(r, "volume", None)),
                 }
