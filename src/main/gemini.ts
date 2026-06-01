@@ -11,7 +11,7 @@ import type { ReferenceAudio, Comparison } from './reference'
 // actually shapes the vocal. Change this (or reorder it) when you switch
 // templates. Indices match FL Studio's mixer numbering.
 // ─────────────────────────────────────────────────────────────────────
-export const VOCAL_CHAIN_BUSES: number[] = [2, 4, 3, 5]
+export const VOCAL_CHAIN_BUSES: number[] = [13, 16, 5, 8]
 
 // ─────────────────────────────────────────────────────────────────────
 // Edit your gear here. This block is injected into the system prompt at
