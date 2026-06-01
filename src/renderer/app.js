@@ -340,7 +340,7 @@ function renderVocalChain(chain, buses) {
       // Only enabled plugins influence the audio; bypassed slots are hidden.
       // Slot numbers are 1-indexed to match what FL Studio displays.
       const plugins = (ins.plugins || [])
-        .filter((p) => p.enabled !== false)
+        .filter((p) => p.enabled === true)
         .slice()
         .sort((a, b) => a.slot - b.slot)
       const pluginHtml =
@@ -1123,7 +1123,7 @@ function renderChainTab(target, r) {
       </div>`
     }
     const plugins = (ins.plugins || [])
-      .filter((p) => p.enabled !== false)
+      .filter((p) => p.enabled === true)
       .slice()
       .sort((a, b) => a.slot - b.slot)
 
@@ -1467,8 +1467,9 @@ window.addEventListener('error', (e) => {
   console.error('[mixcoach] renderer error:', e.error || e.message)
 })
 
-// Header: analyze + close
+// Header: analyze + window controls
 $('btn-trigger').addEventListener('click', () => trigger())
+$('btn-minimize').addEventListener('click', () => window.mc.minimize())
 $('btn-close').addEventListener('click', () => window.mc.hide())
 
 // Header mode toggle

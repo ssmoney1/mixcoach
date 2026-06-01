@@ -117,6 +117,8 @@ function createWindow(): void {
     }
   })
 
+  mainWindow.setAlwaysOnTop(true, 'screen-saver')
+
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
     startMeter()
@@ -214,6 +216,7 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('mc:cancel', () => cancel())
   ipcMain.handle('mc:hide', () => mainWindow?.hide())
+  ipcMain.handle('mc:minimize', () => mainWindow?.minimize())
   ipcMain.handle('mc:quit', () => {
     quitting = true
     app.quit()

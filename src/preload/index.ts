@@ -17,6 +17,7 @@ const api = {
   setMode: (mode: Mode): Promise<boolean> => ipcRenderer.invoke('mc:setMode', mode),
   cancel: (): Promise<boolean> => ipcRenderer.invoke('mc:cancel'),
   hide: () => ipcRenderer.invoke('mc:hide'),
+  minimize: () => ipcRenderer.invoke('mc:minimize'),
   quit: () => ipcRenderer.invoke('mc:quit'),
   getLastWav: (): Promise<ArrayBuffer | null> => ipcRenderer.invoke('mc:lastWav'),
   chat: (messages: ChatMessage[]): Promise<string> =>

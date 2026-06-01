@@ -44,9 +44,60 @@ button.icon  { padding: 2px 9px; font-size: 16px; line-height: 1; }
 /* ─── App shell ─────────────────────────────────────────────────── */
 .app-shell {
   display: grid;
-  grid-template-rows: 56px 1fr;
+  grid-template-rows: 28px 56px 1fr;
   height: 100vh;
   background: var(--bg);
+}
+
+/* ─── Title bar (drag handle + window controls) ─────────────────── */
+.title-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px 0 12px;
+  background: #080808;
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+}
+
+.title-bar-label {
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  pointer-events: none;
+}
+
+.title-bar-actions {
+  display: flex;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.title-bar-actions button {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 0;
+  width: 26px;
+  height: 20px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.title-bar-actions button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.title-bar-close:hover {
+  background: var(--error) !important;
+  color: #fff !important;
 }
 
 .app-header {

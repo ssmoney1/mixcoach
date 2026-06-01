@@ -373,9 +373,11 @@ def _extract_plugins(insert: Any) -> list[dict[str, Any]]:
             continue
         enabled = _slot_enabled(slot)
         if enabled is None:
-            # Fall back to the broken descriptor (yields None) → treat as enabled
-            # so we don't accidentally hide every plugin when pyflp can't tell.
-            enabled = _safe_bool(_try_get(slot, "enabled", True))
+            # pyflp's Slot.enabled descriptor is broken at the slot level — it
+            # calls .own on a plain dict and always raises AttributeError. Fall
+            # back to True (treat as enabled) so we never accidentally hide a
+            # plugin whose bypass state can't be read.
+            enabled = True
         plugins.append(
             {
                 "slot": int(slot_idx) if isinstance(slot_idx, (int, float)) else slot_idx,
