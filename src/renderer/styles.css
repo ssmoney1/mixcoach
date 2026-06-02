@@ -269,6 +269,26 @@ button.icon  { padding: 2px 9px; font-size: 16px; line-height: 1; }
 .bc-sep     { color: var(--text-faint); }
 .bc-section { color: var(--accent); font-weight: 600; }
 
+/* Current FL Studio project chip — pushed to the right edge of the
+   breadcrumb. Filename shown verbatim (no uppercasing) so the .flp name
+   stays readable, in the app's accent-soft pill style. */
+.bc-flp {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid rgba(0, 255, 179, 0.25);
+  border-radius: 4px;
+  padding: 2px 8px;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bc-flp::before { content: "\266B  "; opacity: 0.7; }
+.bc-flp:empty { display: none; }
+
 .tab-content {
   display: flex;
   flex-direction: column;

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { join } from 'node:path'
+import { join, basename } from 'node:path'
 import { app } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import { captureScreenshot, Screenshot } from './screenshot'
@@ -71,6 +71,8 @@ export type PipelineResult = {
   suggestions: Suggestion[]
   audioSource: AudioData['source'] | null
   flpOk: boolean
+  flpName: string | null
+  flpPath: string | null
   screenshotOk: boolean
   wavPath: string | null
   vocalChain: ChainStep[]
@@ -306,6 +308,9 @@ export async function runPipeline(
     suggestions,
     audioSource: audio.source ?? null,
     flpOk: !!flp.ok,
+    flpPath: flp.ok && typeof flp.flp_path === 'string' ? flp.flp_path : null,
+    flpName:
+      flp.ok && typeof flp.flp_path === 'string' ? basename(flp.flp_path) : null,
     screenshotOk: !!screenshot.ok,
     wavPath: audio.ok && typeof audio.wav_path === 'string' ? audio.wav_path : null,
     vocalChain: extractVocalChain(flp),

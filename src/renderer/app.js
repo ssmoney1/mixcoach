@@ -304,8 +304,11 @@ function renderTonalChart(audio, suggestions) {
 function renderVocalChain(chain, buses) {
   if (!Array.isArray(chain) || chain.length === 0) return ''
 
-  const flow = (buses || chain.map((c) => c.bus))
-    .map((b) => `Insert ${b}`)
+  // Derive the flow header from the actual resolved chain (not the static
+  // VOCAL_CHAIN_BUSES preference list) so the arrow always matches the tabs
+  // and panels below — e.g. when extractVocalChain auto-detects real inserts.
+  const flow = chain
+    .map((c) => `Insert ${c.bus}`)
     .join(' <span class="chain-arrow">→</span> ')
 
   const tabs = chain
@@ -1563,6 +1566,10 @@ window.mc.onResult((r) => {
   // Update sidebar last-run readout
   const el = $('sidebar-last-run')
   if (el) el.textContent = `Last run: ${fmtTimestamp(r.timestamp)}`
+  // Show which FL Studio project was analyzed, in the top breadcrumb. Empty
+  // string collapses the chip (see .bc-flp:empty) when no .flp was found.
+  const flpEl = $('bc-flp')
+  if (flpEl) flpEl.textContent = r.flpName || ''
   renderCurrentView()
 })
 

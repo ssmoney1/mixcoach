@@ -19,17 +19,53 @@ from pathlib import Path
 from typing import Any
 
 
+def _fl_data_dir_from_registry() -> Path | None:
+    """Read FL Studio's configured data folder from the Windows registry.
+
+    FL stores the user-facing "Shared data" path under
+    HKCU\\Software\\Image-Line\\Shared\\Paths. Users frequently relocate this
+    off the default Documents path (e.g. to C:\\FLUserData), so the registry —
+    not Documents — is the authoritative source for where Projects live.
+    Returns None on non-Windows, missing key, or any failure.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, r"Software\Image-Line\Shared\Paths"
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "Shared data")
+    except OSError:
+        return None
+    if not value:
+        return None
+    try:
+        return Path(value)
+    except Exception:
+        return None
+
+
 def _projects_dirs() -> list[Path]:
     """Locations to search for .flp files, in priority order.
 
-    Many users have Documents redirected into OneDrive, so we probe both the
-    regular Documents path AND OneDrive\\Documents. The MIXCOACH_FLP_DIR env
-    var still wins if set.
+    The FL Studio data folder (read from the registry) is authoritative, since
+    users often relocate it off Documents. We then fall back to the default
+    Documents path — and because many users have Documents redirected into
+    OneDrive, we probe both the regular Documents path AND OneDrive\\Documents.
+    The MIXCOACH_FLP_DIR env var still wins if set.
     """
     dirs: list[Path] = []
     env_dir = os.environ.get("MIXCOACH_FLP_DIR", "").strip()
     if env_dir:
         dirs.append(Path(env_dir))
+    # Authoritative: FL Studio's configured data folder.
+    reg_data = _fl_data_dir_from_registry()
+    if reg_data:
+        dirs.append(reg_data / "FL Studio" / "Projects")
     user_home = Path(os.path.expanduser("~"))
     # Plain Documents
     dirs.append(user_home / "Documents" / "Image-Line" / "FL Studio" / "Projects")
@@ -65,8 +101,16 @@ def _get_fl_project_name_from_window() -> str | None:
         title = result.stdout.strip()
         if not title or "(Untitled)" in title:
             return None
-        # "FL Studio 21 - ProjectName" → take everything after the last " - "
-        project = title.rsplit(" - ", 1)[-1].strip()
+        # FL Studio's title-bar format has varied across versions:
+        #   FL 21 and earlier:  "FL Studio 21 - ProjectName"
+        #   FL 2025+:           "ProjectName.flp - FL Studio 2025"
+        # Split on " - ", drop the "FL Studio ..." segment, and treat whatever
+        # remains as the project name (preferring a segment that ends in .flp).
+        segments = [s.strip() for s in title.split(" - ") if s.strip()]
+        named = [s for s in segments if not re.match(r"(?i)^fl studio\b", s)]
+        if not named:
+            return None
+        project = next((s for s in named if s.lower().endswith(".flp")), named[0])
         if project.lower().endswith(".flp"):
             project = project[:-4]
         return project or None
@@ -444,7 +488,13 @@ def _extract_mixer(project: Any) -> tuple[list[dict[str, Any]], list[dict[str, A
         return [], []
 
     for idx, insert in enumerate(insert_iter):
-        insert_idx = _try_get(insert, "iid", idx)
+        # FL Studio's displayed mixer track number matches the iteration order
+        # (enumerate index), NOT pyflp's `iid`. pyflp's iid is offset by one —
+        # the Master/Current pseudo-track at the head of the iteration shifts it
+        # — so using iid put every plugin one insert too low (the app's
+        # "Insert 13" fetched FL's track 14). idx keeps "Insert N" aligned with
+        # the number printed on the FL mixer. (enum 0 = Master; 1..125 = inserts.)
+        insert_idx = idx
         name = _try_get(insert, "name", None) or f"Insert {insert_idx}"
         volume = _safe_float(_try_get(insert, "volume", None))
         pan = _safe_float(_try_get(insert, "pan", None))

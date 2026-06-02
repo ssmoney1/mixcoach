@@ -500,12 +500,35 @@ async function geminiRequest(
     }
   }
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    signal
-  })
+  // Hard timeout so a stalled upload/response can never hang the pipeline
+  // forever (the "stuck loading, can't cancel" symptom). The user's cancel
+  // signal still aborts immediately — whichever fires first wins.
+  const ctrl = new AbortController()
+  const TIMEOUT_MS = 90_000
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
+  const forwardAbort = (): void => ctrl.abort()
+  if (signal) {
+    if (signal.aborted) ctrl.abort()
+    else signal.addEventListener('abort', forwardAbort, { once: true })
+  }
+  let res: Awaited<ReturnType<typeof fetch>>
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctrl.signal
+    })
+  } catch (err) {
+    // Distinguish our timeout from a user-initiated cancel.
+    if (ctrl.signal.aborted && !signal?.aborted) {
+      throw new Error(`Gemini request timed out after ${TIMEOUT_MS / 1000}s`)
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', forwardAbort)
+  }
   const json = (await res.json()) as GeminiResponse
   if (!res.ok) {
     throw new Error(`Gemini ${res.status}: ${json.error?.message ?? 'request failed'}`)
