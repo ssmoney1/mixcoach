@@ -333,7 +333,7 @@ button.icon  { padding: 2px 9px; font-size: 16px; line-height: 1; }
 .dashboard-grid {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
-  grid-template-rows: minmax(260px, 1fr) minmax(240px, 1fr);
+  grid-template-rows: minmax(300px, 1fr);
   gap: 14px;
   height: 100%;
   min-height: 0;
@@ -341,8 +341,16 @@ button.icon  { padding: 2px 9px; font-size: 16px; line-height: 1; }
 .dashboard-grid .w-alerts    { grid-column: 1; grid-row: 1; }
 .dashboard-grid .w-chain     { grid-column: 2; grid-row: 1; }
 .dashboard-grid .w-playback  { grid-column: 3; grid-row: 1; }
-.dashboard-grid .w-tonal     { grid-column: 1 / span 2; grid-row: 2; }
-.dashboard-grid .w-suggest   { grid-column: 3;          grid-row: 2; }
+
+/* Extras tab: tonal profile (wide) + suggested changes (narrow). */
+.extras-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: minmax(300px, 1fr);
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
+}
 
 /* ─── Empty state ──────────────────────────────────────────────── */
 .empty-state {
@@ -2004,3 +2012,227 @@ kbd {
 .footer-text {
   font-family: var(--mono);
 }
+
+/* ─── Reference start-time field ──────────────────────────────────── */
+.ref-start-field {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.ref-start-field label {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+.ref-start-field input {
+  width: 88px;
+  padding: 6px 8px;
+  background: #141414;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.ref-start-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.ref-start-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.ref-clip-meta {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+
+/* ─── Final Tweaks checklist (distinct #1a1a1a / #ff6b35 treatment) ── */
+.final-tweaks {
+  background: #1a1a1a;
+  border: 1px solid #3a2a1f;
+  border-left: 3px solid #ff6b35;
+}
+.final-tweaks .widget-h {
+  color: #ff6b35;
+}
+.final-tweaks .ft-group {
+  margin-bottom: 16px;
+}
+.final-tweaks .ft-group:last-child {
+  margin-bottom: 0;
+}
+.ft-group-h {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #ff6b35;
+  margin: 0 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #2a2a2a;
+}
+.ft-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ft-item {
+  margin: 0;
+}
+.ft-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.ft-label:hover {
+  background: rgba(255, 107, 53, 0.06);
+}
+.ft-check {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.ft-box {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  border: 1.5px solid #5a5a5a;
+  border-radius: 3px;
+  position: relative;
+  transition: border-color 0.12s, background 0.12s;
+}
+.ft-check:focus-visible + .ft-box {
+  outline: 2px solid #ff6b35;
+  outline-offset: 1px;
+}
+.ft-check:checked + .ft-box {
+  background: #ff6b35;
+  border-color: #ff6b35;
+}
+.ft-check:checked + .ft-box::after {
+  content: '';
+  position: absolute;
+  left: 4.5px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid #1a1a1a;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.ft-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.ft-text code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: #242424;
+  color: #ffb38f;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.ft-item.done .ft-text {
+  text-decoration: line-through;
+  color: var(--text-dim);
+}
+.ft-item.done .ft-text code {
+  color: var(--text-dim);
+}
+
+/* ─── Empty-state "load reference first" link ─────────────────────── */
+.btn-link-ref {
+  margin-top: 14px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn-link-ref:hover {
+  color: #ff6b35;
+  border-color: #ff6b35;
+  background: rgba(255, 107, 53, 0.06);
+}
+
+/* ─── Browser preview banner (only shows when window.mc is mocked) ─── */
+.preview-banner {
+  position: fixed;
+  bottom: 10px;
+  right: 12px;
+  z-index: 9999;
+  background: #ff6b35;
+  color: #1a1a1a;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 5px 10px;
+  border-radius: 4px;
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+/* ─── Settings tab ────────────────────────────────────────────────── */
+.settings-stack { max-width: 720px; }
+.set-theme-list { display: flex; flex-direction: column; gap: 10px; }
+.set-theme {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  text-align: left;
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.set-theme:hover { border-color: var(--border-strong); }
+.set-theme.active { border-color: var(--accent); background: var(--accent-soft); }
+.set-swatch {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 40px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.sw-aurora .set-swatch {
+  background:
+    radial-gradient(circle at 75% 20%, rgba(255, 69, 224, 0.9), transparent 60%),
+    radial-gradient(circle at 10% 90%, rgba(54, 200, 255, 0.9), transparent 60%),
+    linear-gradient(160deg, #0c0a1e, #140d33);
+}
+.sw-matrix .set-swatch {
+  background: linear-gradient(180deg, #00060f, #03101f);
+  box-shadow: inset 0 0 0 1px rgba(41, 182, 255, 0.5), inset 0 0 12px rgba(41, 182, 255, 0.4);
+}
+.sw-fl .set-swatch {
+  background: linear-gradient(160deg, #1c1c1c, #161616);
+  box-shadow: inset 0 0 0 1px rgba(0, 255, 179, 0.45), inset 0 0 12px rgba(0, 255, 179, 0.25);
+}
+.set-theme-info { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.set-theme-name { font-size: 15px; font-weight: 600; color: var(--text); }
+.set-theme-name em { font-style: normal; font-size: 11px; color: var(--text-dim); font-weight: 400; }
+.set-theme-desc { font-size: 12.5px; color: var(--text-dim); line-height: 1.45; }
+.set-check {
+  flex: 0 0 auto;
+  font-size: 16px;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.set-theme.active .set-check { opacity: 1; }

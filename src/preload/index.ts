@@ -22,12 +22,14 @@ const api = {
   getLastWav: (): Promise<ArrayBuffer | null> => ipcRenderer.invoke('mc:lastWav'),
   chat: (messages: ChatMessage[]): Promise<string> =>
     ipcRenderer.invoke('mc:chat', messages),
-  pickReference: (): Promise<{
+  pickReference: (
+    startSec?: string | number
+  ): Promise<{
     ok: boolean
     cancelled?: boolean
     error?: string
     reference?: unknown
-  }> => ipcRenderer.invoke('mc:pickReference'),
+  }> => ipcRenderer.invoke('mc:pickReference', startSec),
   getReference: (): Promise<unknown> => ipcRenderer.invoke('mc:getReference'),
   clearReference: (): Promise<boolean> => ipcRenderer.invoke('mc:clearReference'),
   onStart: (cb: Listener<{ startedAt: string }>) => on('mc:start', cb),

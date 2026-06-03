@@ -2,6 +2,335 @@
 
 const $ = (id) => document.getElementById(id)
 
+// ─── Browser preview mode ───────────────────────────────────────────
+// When opened in a plain browser (http://localhost:5173) instead of Electron,
+// `window.mc` (the preload bridge) doesn't exist. Install a mock with a full
+// sample analysis so the whole UI — especially the AI Analysis tab — renders
+// with realistic data for design review. No-op inside Electron (preload sets
+// window.mc before this runs).
+function installPreviewMock() {
+  // Sample AI response — single-quoted lines so backticks pass through as
+  // literal markdown; only apostrophes are escaped.
+  const SAMPLE_TEXT = [
+    '## Problem 1: [MUD] Boxy low-mids',
+    '**Problem:** 808 + vocal stack at `250-500 Hz`. `+2.8 dB` hotter than ref (mud `0.31` vs `0.19`).',
+    '**Fix:** `Pro-Q 3` on `Insert 13`: `-2.5 dB` bell @ `310 Hz`, `Q 1.4`. `Pro-MB` on 808 `Insert 3`: `-2 dB` @ `200-350 Hz`, dynamic.',
+    '**Does:** Clears the boxiness — vocal reads open like the reference.',
+    '',
+    '## Problem 2: [DYNAMICS] Vocal rides unevenly',
+    '**Problem:** Vocal jumps front-to-back. `LRA 7.5` vs ref `5.0` — `2.5 LU` too dynamic.',
+    '**Fix:** Add `CLA-2A` before `CLA-76` on `Insert 13` (`2-3 dB` leveling). Set `CLA-76`: `4:1`, atk `~3`, rel `6-7`, `3-4 dB GR`.',
+    '**Does:** Vocal sits steady and glued, every line.',
+    '',
+    '## Problem 3: [SIBILANCE] De-esser in the wrong spot',
+    '**Problem:** Esses stab. Sibilance `0.28` vs `0.18`. `Pro-DS` sits BEFORE the comp on `Insert 13`.',
+    '**Fix:** Move `Pro-DS` to end of chain (after `CLA-76`). Target `7.2 kHz`, `4-5 dB`.',
+    '**Does:** Comp stops re-lifting the esses you just removed.',
+    '',
+    '## Problem 4: [AIR] Dull + dry vocal',
+    '**Problem:** Veiled, no space. Air `-30 dBFS` vs ref `-24` (`6 dB` darker).',
+    '**Fix:** `Pro-Q 3`: `+2 dB` shelf @ `11 kHz`, `+2.5 dB` @ `3 kHz`. `Pro-R` on `Insert 5`: plate, `1.2 s`.',
+    '**Does:** Vocal opens up and sits back in a room like the ref.',
+    '',
+    '## Closing the gap to "midnight_drive_master.wav"',
+    '',
+    '1. **Dynamics (`+2.5 LU LRA`):** two-stage vocal compression (Problem 2) + master glue.',
+    '2. **Loudness (`-2.2 LU`, `-11.2` vs `-9.0`):** quieter AND peaking hotter (`-0.4` vs `-1.0 dBTP`) — a headroom problem, fixed at the master.',
+    '3. **Tonal:** mud (Problem 1) and air (`-6 dB` darker — `+2 dB` shelf at `11 kHz`).',
+    '4. **Width (`-0.12`, `0.22` vs `0.34`):** reference is wider — widen background sends.',
+    '',
+    '## Plugin chain changes',
+    '- `Add Insert 13 slot 3: CLA-2A — slow leveling before CLA-76 to tame the ride (LRA 7.5 → ~5 LU)`',
+    '- `Reorder Insert 13: 2 -> 6 — Pro-DS — de-ess after the compressors so they don\'t re-lift the esses`',
+    '- `Setting: Insert 13 CLA-76 — ratio 4:1, attack ~3, release 6-7, 3-4 dB GR (peaks only)`',
+    '- `Setting: Insert 13 Pro-Q 3 — -2.5 dB @ 310 Hz Q1.4, +2.5 dB @ 3 kHz Q1.0, +2 dB shelf @ 11 kHz`',
+    '- `Add Insert 3 slot 3: Pro-MB — dynamic -2 dB at 200-350 Hz on the 808 to clear vocal mud`',
+    '- `Setting: Master Pro-L 2 — ceiling -1.0 dBTP, push input ~2 dB to close the -2.2 LU loudness gap`',
+    '',
+    '## Final Tweaks',
+    '',
+    '**Lead vocal (Insert 13)**',
+    '- Add `CLA-2A` (slot 3) — `Compress`, `2-3 dB` leveling',
+    '- Set `CLA-76` — `4:1`, attack `~3`, release `6-7`, `3-4 dB GR`',
+    '- Move `Pro-DS` to the end of the chain — target `7.2 kHz`, `4-5 dB`',
+    '- `Pro-Q 3` — `-2.5 dB @ 310 Hz`, `+2.5 dB @ 3 kHz`, `+2 dB shelf @ 11 kHz`',
+    '- `Saturn 2` — light tube/tape, `Mix ~15%`',
+    '',
+    '**Backgrounds / beat**',
+    '- `Pro-MB` on 808 (Insert 3) — `-2 dB @ 200-350 Hz` dynamic',
+    '- `S1 Imager` on synth/pad sends — widen `0.22 → ~0.32` (keep kick, 808, lead mono)',
+    '',
+    '**Master**',
+    '- `SSLGChannel` — `2:1`, `~2 dB GR` to tighten LRA toward `5 LU`',
+    '- `Pro-L 2` — ceiling `-1.0 dBTP`, input `+2 dB` to reach `~-9 LUFS`',
+    '',
+    '**Working well:** Your vocal tuning and 808 tone are genuinely solid — this is a dynamics-and-brightness fix, not a re-mix.'
+  ].join('\n')
+
+  const SAMPLE_AUDIO = {
+    ok: true, source: 'local', sample_rate: 44100, bit_depth: 16,
+    integrated_lufs: -11.2, true_peak_db: -0.4, loudness_range_lra: 7.5,
+    clipping_detected: false, clipping_sample_count: 0,
+    mono_compatible: true, phase_correlation: 0.62, stereo_width: 0.22,
+    crest_factor_db: 11.2,
+    tonal_bands: { sub: -16, bass: -10, low_mid: -9.5, mid: -12, high_mid: -16, air: -30 },
+    dominant_band: 'low_mid', mud_ratio: 0.31, harshness_ratio: 0.16, sibilance_ratio: 0.28,
+    key: 'F minor', key_confidence: 0.71, bpm: 140.0, bpm_stability_pct: 1.8, wav_path: null
+  }
+  const SAMPLE_REFERENCE = {
+    ok: true, source: 'local', filename: 'midnight_drive_master.wav',
+    reference_filename: 'midnight_drive_master.wav',
+    reference_path: 'C:\\Music\\refs\\midnight_drive_master.wav',
+    clipPath: 'preview', startSec: 75, durationSec: 210, reference_duration_sec: 210,
+    integrated_lufs: -9.0, true_peak_db: -1.0, loudness_range_lra: 5.0,
+    stereo_width: 0.34, crest_factor_db: 9.0,
+    tonal_bands: { sub: -15, bass: -9, low_mid: -12.3, mid: -12, high_mid: -13, air: -24 },
+    mud_ratio: 0.19, harshness_ratio: 0.20, sibilance_ratio: 0.18
+  }
+  const SAMPLE_COMPARISON = {
+    reference_filename: 'midnight_drive_master.wav',
+    lufs_diff: -2.2, true_peak_diff: 0.6, lra_diff: 2.5, stereo_width_diff: -0.12,
+    crest_factor_diff: 2.2, mud_diff: 0.12, harshness_diff: -0.04, sibilance_diff: 0.10,
+    tonal_band_diffs: { sub: -1, bass: -1, low_mid: 2.8, mid: 0, high_mid: -3, air: -6 },
+    summary: [
+      'Loudness: your mix is 2.2 LU quieter (-11.2 LUFS vs reference -9.0 LUFS)',
+      'air (8-20k Hz): 6.0 dB thinner / quieter than reference',
+      'Dynamics: your mix is 2.5 LU looser / less compressed than reference',
+      'low-mid (250-500 Hz): 2.8 dB hotter / heavier than reference'
+    ],
+    fixes: [
+      'Push the master 2.2 dB through Pro-L 2 (ceiling -1 dBTP) to match reference loudness.',
+      'Add Fresh Air or a +1.5 dB shelf at 10 kHz on the mix bus.',
+      'Add bus glue compression (SSLGChannel, 2:1, 2 dB GR) before the limiter.'
+    ]
+  }
+  const plug = (slot, name) => ({ slot, name, enabled: true, mix: 100 })
+  const ins = (index, name, plugins) => ({ index, name, volume: 0, pan: 0, muted: false, plugins })
+  const SAMPLE_CHAIN = [
+    { bus: 13, insert: ins(13, 'LEAD VOX', [plug(0, 'Auto-Tune Pro'), plug(1, 'Pro-DS'), plug(2, 'CLA-76'), plug(3, 'Pro-Q 3')]) },
+    { bus: 16, insert: ins(16, 'DOUBLES', [plug(0, 'Pro-Q 3'), plug(1, 'CLA-2A')]) },
+    { bus: 5, insert: ins(5, 'VOX VERB', []) },
+    { bus: 8, insert: ins(8, 'VOX DELAY', []) }
+  ]
+  const SAMPLE_RESULT = {
+    ok: true, text: SAMPLE_TEXT, timestamp: '2026-06-03T12:00:00.000Z',
+    audio: SAMPLE_AUDIO, audioSource: 'local',
+    suggestions: [
+      { title: 'Low Mid Buildup', message: 'Excess energy in the 250-500hz mud zone, high pass or cut there.', severity: 'warning' },
+      { title: 'Sibilance', message: 'High 6-10khz sibilance detected, consider a de-esser.', severity: 'warning' },
+      { title: 'Stereo Field', message: 'Your mix is too narrow, consider widening the stereo image.', severity: 'warning' }
+    ],
+    flpOk: true, flpName: 'midnight_drive.flp', flpPath: 'C:\\Music\\midnight_drive.flp',
+    screenshotOk: true, wavPath: null,
+    vocalChain: SAMPLE_CHAIN, vocalChainBuses: [13, 16, 5, 8], mode: 'both',
+    vocalVerdict: {
+      headline: 'Dull', clarity_score: 82,
+      issues: ['dull / lacks presence — air band (10+ kHz) at -30.0 dBFS'],
+      fixes: ['Add Fresh Air (or a +2 dB high shelf at 12 kHz on Pro-Q 3) for openness.']
+    },
+    reference: SAMPLE_REFERENCE, comparison: SAMPLE_COMPARISON
+  }
+
+  const listeners = {}
+  const on = (name) => (cb) => {
+    ;(listeners[name] || (listeners[name] = [])).push(cb)
+    return () => {}
+  }
+  const emit = (name, payload) => (listeners[name] || []).forEach((cb) => cb(payload))
+  let ref = SAMPLE_REFERENCE
+
+  const parseStart = (raw) => {
+    if (!raw) return SAMPLE_REFERENCE.startSec
+    const s = String(raw).trim()
+    if (s.includes(':')) {
+      const p = s.split(':').map(Number)
+      return p.length === 2 ? p[0] * 60 + p[1] : p[0] * 3600 + p[1] * 60 + p[2]
+    }
+    const n = Number(s)
+    return isFinite(n) ? n : SAMPLE_REFERENCE.startSec
+  }
+
+  window.__mixcoachPreview = true
+  window.mc = {
+    trigger: async () => {
+      emit('mc:start', { startedAt: new Date().toISOString() })
+      const phases = [
+        { phase: 'recording', seconds_remaining: 3 },
+        { phase: 'analyzing' },
+        { phase: 'flp' },
+        { phase: 'gemini' }
+      ]
+      phases.forEach((p, i) => setTimeout(() => emit('mc:status', p), 250 * (i + 1)))
+      setTimeout(() => emit('mc:result', { ...SAMPLE_RESULT, reference: ref, mode: currentMode }), 250 * (phases.length + 1))
+    },
+    setMode: async () => true,
+    cancel: async () => true,
+    hide: async () => {},
+    minimize: async () => {},
+    quit: async () => {},
+    getLastWav: async () => null,
+    chat: async (msgs) => {
+      const last = msgs[msgs.length - 1]?.text || ''
+      return '_(preview mode — chat is mocked)_\n\nYou asked: **' + last + '**. In the real app I would answer grounded in the analysis above, citing exact inserts and values.'
+    },
+    pickReference: async (startSec) => {
+      ref = { ...SAMPLE_REFERENCE, startSec: parseStart(startSec) }
+      return { ok: true, reference: ref }
+    },
+    getReference: async () => ref,
+    clearReference: async () => {
+      ref = null
+      return true
+    },
+    onStart: on('mc:start'),
+    onStatus: on('mc:status'),
+    onResult: on('mc:result'),
+    onError: on('mc:error'),
+    onCancelled: on('mc:cancelled'),
+    onMeter: on('mc:meter')
+  }
+
+  // Visible badge + theme switcher + auto-load the sample so tabs populate.
+  const THEME_CLASSES = ['theme-aurora', 'theme-console', 'theme-paper', 'theme-matrix']
+  const THEMES = [
+    ['', 'Default'],
+    ['theme-aurora', '1 · Aurora'],
+    ['theme-console', '2 · Console'],
+    ['theme-paper', '3 · Paper'],
+    ['theme-matrix', '4 · Matrix']
+  ]
+  const applyTheme = (cls) => {
+    document.body.classList.remove(...THEME_CLASSES)
+    if (cls) document.body.classList.add(cls)
+    try { localStorage.setItem('mixcoach.previewTheme', cls) } catch {}
+  }
+  const showChrome = () => {
+    if (!document.querySelector('.preview-banner')) {
+      const b = document.createElement('div')
+      b.className = 'preview-banner'
+      b.textContent = 'DESIGN PREVIEW — mock data'
+      document.body.appendChild(b)
+    }
+    if (!document.querySelector('.preview-themes')) {
+      let saved = ''
+      try { saved = localStorage.getItem('mixcoach.previewTheme') || '' } catch {}
+      applyTheme(saved)
+      let savedLayout = 'l4'
+      try { savedLayout = localStorage.getItem('mixcoach.aiLayout') || 'l4' } catch {}
+      window.__aiLayout = savedLayout
+
+      const LAYOUTS = [
+        ['classic', 'Classic'],
+        ['l1', '1 · Cards'],
+        ['l2', '2 · Ledger'],
+        ['l3', '3 · Split'],
+        ['l4', '4 · Steps']
+      ]
+      const wrap = document.createElement('div')
+      wrap.className = 'preview-themes'
+      wrap.innerHTML =
+        '<div class="pt-title">THEME</div>' +
+        THEMES.map(([cls, label]) => `<button data-theme="${cls}">${label}</button>`).join('') +
+        '<div class="pt-title pt-title-2">AI LAYOUT</div>' +
+        LAYOUTS.map(([id, label]) => `<button data-layout="${id}">${label}</button>`).join('')
+      document.body.appendChild(wrap)
+
+      const syncTheme = () =>
+        wrap.querySelectorAll('[data-theme]').forEach((x) => {
+          let t = ''
+          try { t = localStorage.getItem('mixcoach.previewTheme') || '' } catch {}
+          x.classList.toggle('active', x.dataset.theme === t)
+        })
+      const syncLayout = () =>
+        wrap.querySelectorAll('[data-layout]').forEach((x) =>
+          x.classList.toggle('active', x.dataset.layout === (window.__aiLayout || 'classic'))
+        )
+      wrap.querySelectorAll('[data-theme]').forEach((b) =>
+        b.addEventListener('click', () => {
+          applyTheme(b.dataset.theme)
+          syncTheme()
+        })
+      )
+      wrap.querySelectorAll('[data-layout]').forEach((b) =>
+        b.addEventListener('click', () => {
+          window.__aiLayout = b.dataset.layout
+          try { localStorage.setItem('mixcoach.aiLayout', b.dataset.layout) } catch {}
+          syncLayout()
+          // Jump to the AI tab so the change is immediately visible.
+          if (typeof setTab === 'function') setTab('ai')
+          else if (typeof renderCurrentView === 'function') renderCurrentView()
+        })
+      )
+      syncTheme()
+      syncLayout()
+    }
+  }
+  if (document.body) showChrome()
+  else document.addEventListener('DOMContentLoaded', showChrome)
+  // Deliver the sample result after app.js finishes wiring its listeners.
+  setTimeout(() => emit('mc:result', { ...SAMPLE_RESULT, mode: currentMode }), 60)
+}
+
+if (!window.mc) installPreviewMock()
+
+// ─── App theme (Settings tab) ───────────────────────────────────────
+// Three user-selectable themes. Aurora is the default. Persisted to
+// localStorage and applied app-wide via a body class. The browser preview
+// theme switcher (preview only) is separate and owns the body class there.
+const APP_THEME_KEY = 'mixcoach.theme'
+const APP_THEMES = [
+  { id: 'aurora', cls: 'theme-aurora', name: 'Aurora', desc: 'Synthwave glass — neon magenta + cyan on deep violet.', def: true },
+  { id: 'matrix', cls: 'theme-matrix', name: 'Matrix', desc: 'Cyber terminal — electric blue monospace on black.' },
+  { id: 'fl', cls: '', name: 'FL', desc: 'The original MixCoach look — teal on charcoal.' }
+]
+const ALL_THEME_CLASSES = ['theme-aurora', 'theme-console', 'theme-paper', 'theme-matrix']
+
+function getAppTheme() {
+  try {
+    return localStorage.getItem(APP_THEME_KEY) || 'aurora'
+  } catch {
+    return 'aurora'
+  }
+}
+function applyAppTheme(id) {
+  const theme = APP_THEMES.find((t) => t.id === id) || APP_THEMES[0]
+  document.body.classList.remove(...ALL_THEME_CLASSES)
+  if (theme.cls) document.body.classList.add(theme.cls)
+  try { localStorage.setItem(APP_THEME_KEY, theme.id) } catch {}
+}
+
+function renderSettingsTab(target) {
+  const current = getAppTheme()
+  const cards = APP_THEMES.map(
+    (t) => `
+      <button class="set-theme sw-${t.id} ${t.id === current ? 'active' : ''}" data-theme-id="${t.id}">
+        <span class="set-swatch"></span>
+        <span class="set-theme-info">
+          <span class="set-theme-name">${escapeHtml(t.name)}${t.def ? '<em> · default</em>' : ''}</span>
+          <span class="set-theme-desc">${escapeHtml(t.desc)}</span>
+        </span>
+        <span class="set-check">✓</span>
+      </button>`
+  ).join('')
+  target.innerHTML = `
+    <div class="settings-stack">
+      <div class="widget">
+        <h3 class="widget-h">Appearance <span class="widget-sub">theme</span></h3>
+        <div class="widget-body"><div class="set-theme-list">${cards}</div></div>
+      </div>
+    </div>`
+  target.querySelectorAll('[data-theme-id]').forEach((b) =>
+    b.addEventListener('click', () => {
+      applyAppTheme(b.dataset.themeId)
+      renderSettingsTab(target)
+    })
+  )
+}
+
+// Apply the saved theme on startup (real app only — the browser preview's
+// own switcher controls the body class there).
+if (!window.__mixcoachPreview) applyAppTheme(getAppTheme())
+
 // ─── Analysis mode (vocal / beat / both) ────────────────────────────
 const MODE_KEY = 'mixcoach.mode'
 const VALID_MODES = ['vocal', 'beat', 'both']
@@ -55,10 +384,12 @@ let currentTab = 'dashboard'
 const TAB_LABELS = {
   dashboard: 'Dashboard',
   ai: 'AI Analysis',
+  extras: 'Extras',
   chain: 'Chain Edits',
   chat: 'Chat',
   keybpm: 'Key & BPM',
-  compare: 'Compare'
+  compare: 'Compare',
+  settings: 'Settings'
 }
 
 function setTab(name) {
@@ -426,7 +757,8 @@ function renderReferenceCard() {
     referenceCard.innerHTML = `
       <div class="ref-empty">
         <div class="ref-empty-h">Reference Track</div>
-        <div class="ref-empty-msg">Upload a finished, mastered track and MixCoach will compare every analysis against it so the AI can tell you exactly how to close the gap.</div>
+        <div class="ref-empty-msg">Upload a finished, mastered track and MixCoach will compare every analysis against it so the AI can tell you exactly how to close the gap. MixCoach analyzes a 15-second segment and lets the AI <em>hear</em> it.</div>
+        ${renderRefStartField()}
         <button id="btn-pick-ref" type="button" class="btn-ref-pick">Upload reference</button>
       </div>`
     const btn = $('btn-pick-ref')
@@ -459,19 +791,52 @@ function renderReferenceCard() {
         <span><strong>${fmt(r.stereo_width)}</strong> width</span>
       </div>
       ${tonalRow ? `<div class="ref-bands">${tonalRow}</div>` : ''}
+      <div class="ref-clip-meta">${refClipMeta(r)}</div>
+      ${renderRefStartField(r.startSec)}
     </div>`
   $('btn-replace-ref')?.addEventListener('click', pickReference)
   $('btn-clear-ref')?.addEventListener('click', clearReference)
 }
 
+// Start-time input: the producer types where the 15s analysis window begins
+// (`1:30` or `90`). Empty → Python defaults to 50% into the file.
+function renderRefStartField(currentSec) {
+  const hint =
+    currentSec != null && isFinite(currentSec)
+      ? `currently ${fmtClock(currentSec)} — change + re-upload to move it`
+      : 'optional · e.g. 1:30 or 90 · blank = middle of the song'
+  return `
+    <div class="ref-start-field">
+      <label for="ref-start">Analyze from</label>
+      <input id="ref-start" type="text" inputmode="numeric" placeholder="mm:ss" autocomplete="off" />
+      <span class="ref-start-hint">${hint}</span>
+    </div>`
+}
+
+function refClipMeta(r) {
+  if (r.startSec == null) return ''
+  const dur = r.reference_duration_sec
+  const where = `15s segment from ${fmtClock(r.startSec)}`
+  return typeof dur === 'number' && isFinite(dur) ? `${where} of ${fmtClock(dur)}` : where
+}
+
+function fmtClock(totalSec) {
+  const s = Math.max(0, Math.round(totalSec))
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return `${m}:${String(r).padStart(2, '0')}`
+}
+
 async function pickReference() {
   const btn = $('btn-pick-ref') || $('btn-replace-ref')
+  // Read the start-time the producer typed before we replace the DOM.
+  const startSec = $('ref-start')?.value?.trim() || undefined
   if (btn) {
     btn.disabled = true
     btn.textContent = 'Analyzing…'
   }
   try {
-    const res = await window.mc.pickReference?.()
+    const res = await window.mc.pickReference?.(startSec)
     if (!res || res.cancelled) return
     if (!res.ok) {
       alert(`Reference failed: ${res.error || 'unknown error'}`)
@@ -789,11 +1154,21 @@ function renderCurrentView() {
     return
   }
   if (!lastResult) {
+    // Compare (reference picker) and Settings are usable BEFORE any analysis.
+    if (currentTab === 'compare') {
+      renderCompareTab(target, { comparison: null })
+      return
+    }
+    if (currentTab === 'settings') {
+      renderSettingsTab(target)
+      return
+    }
     target.innerHTML = renderEmpty()
     target.querySelectorAll('.mode-opt').forEach((btn) => {
       btn.addEventListener('click', () => setMode(btn.dataset.mode))
     })
     target.querySelector('#btn-empty-analyze')?.addEventListener('click', () => trigger())
+    target.querySelector('#btn-empty-reference')?.addEventListener('click', () => setTab('compare'))
     applyModeUI()
     return
   }
@@ -806,6 +1181,9 @@ function renderCurrentView() {
     case 'ai':
       renderAITab(target, lastResult)
       break
+    case 'extras':
+      renderExtrasTab(target, lastResult)
+      break
     case 'chain':
       renderChainTab(target, lastResult)
       break
@@ -817,6 +1195,9 @@ function renderCurrentView() {
       break
     case 'compare':
       renderCompareTab(target, lastResult)
+      break
+    case 'settings':
+      renderSettingsTab(target)
       break
     default:
       renderPlaceholder(target, currentTab, '')
@@ -834,6 +1215,7 @@ function renderEmpty() {
         <button class="mode-opt" data-mode="both" role="radio" aria-checked="false">Both</button>
       </div>
       <button id="btn-empty-analyze" type="button" class="btn-big">ANALYZE</button>
+      <button id="btn-empty-reference" type="button" class="btn-link-ref">＋ Load a reference track first</button>
     </div>`
 }
 
@@ -954,6 +1336,89 @@ function extractWorkingWell(text) {
   return m ? m[1].trim() : ''
 }
 
+// Parse the `## Final Tweaks` section into groups keyed by bold sub-headings
+// (`**Lead vocal (Insert 13)**`), each with a list of one-line moves. Ends at
+// the next `## ` section or the `**Working well:**` line. Degrades to a single
+// "Final Tweaks" group if the model emits bullets without sub-headings.
+function parseFinalTweaks(text) {
+  if (!text) return []
+  const section = text.match(
+    /##\s*Final\s*Tweaks\s*\n([\s\S]*?)(?=\n##\s|\n\*\*Working\s+well|$)/i
+  )
+  if (!section) return []
+  const groups = []
+  let cur = null
+  for (const raw of section[1].split(/\r?\n/)) {
+    const t = raw.replace(/\r$/, '').trim()
+    if (!t) continue
+    // `**Heading**` or `**Heading:**` on its own line opens a group.
+    const head = t.match(/^\*\*(.+?)\*\*:?$/)
+    if (head) {
+      cur = { heading: head[1].trim(), items: [] }
+      groups.push(cur)
+      continue
+    }
+    const bullet = t.match(/^[-*]\s+(.*)$/)
+    const item = bullet ? bullet[1].trim() : t
+    if (!cur) {
+      cur = { heading: 'Final Tweaks', items: [] }
+      groups.push(cur)
+    }
+    cur.items.push(item)
+  }
+  return groups.filter((g) => g.items.length)
+}
+
+// Inline markdown for short snippets (code + bold) — used by the Final Tweaks
+// checklist where we render <li>s ourselves instead of going through
+// renderMarkdown.
+function inlineMd(text) {
+  let s = escapeHtml(text)
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>')
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  return s
+}
+
+function renderFinalTweaks(groups) {
+  if (!groups.length) return ''
+  const groupHtml = groups
+    .map(
+      (g, gi) => `
+      <div class="ft-group">
+        <div class="ft-group-h">${escapeHtml(g.heading)}</div>
+        <ul class="ft-list">
+          ${g.items
+            .map(
+              (it, ii) => `
+            <li class="ft-item">
+              <label class="ft-label">
+                <input type="checkbox" class="ft-check" data-g="${gi}" data-i="${ii}" />
+                <span class="ft-box" aria-hidden="true"></span>
+                <span class="ft-text">${inlineMd(it)}</span>
+              </label>
+            </li>`
+            )
+            .join('')}
+        </ul>
+      </div>`
+    )
+    .join('')
+  return `
+    <div class="widget final-tweaks">
+      <h3 class="widget-h">Final Tweaks <span class="widget-sub">action checklist</span></h3>
+      <div class="widget-body">${groupHtml}</div>
+    </div>`
+}
+
+function wireFinalTweaks(root) {
+  root.querySelectorAll('.ft-check').forEach((box) => {
+    box.addEventListener('change', () => {
+      const li = box.closest('.ft-item')
+      if (li) li.classList.toggle('done', box.checked)
+    })
+  })
+}
+
 // Map problem [TYPE] tags to a CSS hue + display label.
 const PROBLEM_TYPE_META = {
   EQ:              { label: 'EQ',              hue: 'hue-eq' },
@@ -975,11 +1440,216 @@ const PROBLEM_TYPE_META = {
   OTHER:           { label: 'Other',           hue: 'hue-other' }
 }
 
-function renderAITab(target, r) {
-  const problems = parseProblems(r.text || '')
-  const working = extractWorkingWell(r.text || '')
+// Active AI-tab layout. 'classic' is the shipped design; l1-l4 are the
+// preview drafts the design switcher can select (browser preview only — in
+// Electron localStorage has no value so it stays 'classic').
+function getAILayout() {
+  // 'l4' (Steps) is the shipped layout. The browser preview switcher can
+  // override via window.__aiLayout / localStorage for design exploration.
+  if (typeof window !== 'undefined' && window.__aiLayout) return window.__aiLayout
+  try {
+    return localStorage.getItem('mixcoach.aiLayout') || 'l4'
+  } catch {
+    return 'l4'
+  }
+}
 
-  if (!problems.length) {
+// Pull the terse Problem / Fix / Does lines out of a problem body. Falls back
+// to the whole body as "problem" if the model didn't use the labels.
+function parseTerseBody(body) {
+  const grab = (label) => {
+    const re = new RegExp('\\*\\*' + label + ':\\*\\*\\s*([\\s\\S]+?)(?=\\n\\*\\*[A-Za-z]+:\\*\\*|$)', 'i')
+    const m = body.match(re)
+    return m ? m[1].trim() : ''
+  }
+  const problem = grab('Problem')
+  return {
+    problem: problem || body.trim(),
+    fix: grab('Fix'),
+    result: grab('Does') || grab('Result')
+  }
+}
+
+// Normalized model every AI layout renders from — so they all show the SAME
+// information, just arranged differently.
+function buildAIModel(r) {
+  const problems = parseProblems(r.text || '').map((p) => {
+    const meta = PROBLEM_TYPE_META[p.type] || PROBLEM_TYPE_META.OTHER
+    const t = parseTerseBody(p.body)
+    return { type: p.type, title: p.title, hue: meta.hue, label: meta.label, ...t }
+  })
+  return {
+    problems,
+    finalTweaks: parseFinalTweaks(r.text || ''),
+    working: extractWorkingWell(r.text || ''),
+    comparison: r.comparison || null
+  }
+}
+
+// Shared pieces ------------------------------------------------------------
+function aiWorkingBlock(working) {
+  return working
+    ? `<div class="widget working-well"><div class="ww-h">WORKING WELL</div><div class="ww-body">${escapeHtml(working)}</div></div>`
+    : ''
+}
+function aiDeltaStrip(comparison) {
+  if (!comparison || !(comparison.summary || []).length) return ''
+  const chips = comparison.summary
+    .slice(0, 4)
+    .map((s) => `<span class="ai-delta-chip">${escapeHtml(s.split(' (')[0])}</span>`)
+    .join('')
+  return `<div class="ai-delta-strip"><span class="ai-delta-label">vs reference</span>${chips}</div>`
+}
+
+// LAYOUT: classic (shipped) ------------------------------------------------
+function aiLayoutClassic(m) {
+  const cards = m.problems
+    .map((p, i) => {
+      // Terse (Problem/Fix/Does) responses get the structured body; older
+      // prose responses (no labels) fall back to full markdown so nothing
+      // is lost in the shipped app.
+      const terse = p.fix || p.result
+      const body = terse
+        ? `<p>${inlineMd(p.problem)}</p>` +
+          (p.fix ? `<p><strong>Fix:</strong> ${inlineMd(p.fix)}</p>` : '') +
+          (p.result ? `<p><strong>Does:</strong> ${inlineMd(p.result)}</p>` : '')
+        : renderMarkdown(p.problem)
+      return `
+      <div class="widget problem-card ${p.hue}">
+        <h3 class="widget-h">
+          <span class="problem-num">PROBLEM ${i + 1}</span>
+          <span class="problem-tag ${p.hue}">${escapeHtml(p.label)}</span>
+          <span class="problem-title">${escapeHtml(p.title)}</span>
+        </h3>
+        <div class="widget-body problem-body">${body}</div>
+      </div>`
+    })
+    .join('')
+  return `<div class="ai-stack">${cards}${renderFinalTweaks(m.finalTweaks)}${aiWorkingBlock(m.working)}</div>`
+}
+
+// LAYOUT 1: big 3-zone cards ----------------------------------------------
+function aiLayoutCards(m) {
+  const cards = m.problems
+    .map(
+      (p, i) => `
+      <div class="aic ${p.hue}">
+        <div class="aic-head">
+          <span class="aic-num">${String(i + 1).padStart(2, '0')}</span>
+          <span class="aic-tag ${p.hue}">${escapeHtml(p.label)}</span>
+          <span class="aic-title">${escapeHtml(p.title)}</span>
+        </div>
+        <div class="aic-zone aic-problem"><span class="aic-k">Problem</span><div class="aic-v">${inlineMd(p.problem)}</div></div>
+        ${p.fix ? `<div class="aic-zone aic-fix"><span class="aic-k">Fix</span><div class="aic-v">${inlineMd(p.fix)}</div></div>` : ''}
+        ${p.result ? `<div class="aic-zone aic-does"><span class="aic-k">Does</span><div class="aic-v">${inlineMd(p.result)}</div></div>` : ''}
+      </div>`
+    )
+    .join('')
+  return `<div class="ai-layout l-cards">${aiDeltaStrip(m.comparison)}${cards}${renderFinalTweaks(m.finalTweaks)}${aiWorkingBlock(m.working)}</div>`
+}
+
+// LAYOUT 2: ledger table ---------------------------------------------------
+function aiLayoutLedger(m) {
+  const rows = m.problems
+    .map(
+      (p, i) => `
+      <div class="ail-row">
+        <div class="ail-c ail-n">${i + 1}</div>
+        <div class="ail-c ail-tagc"><span class="aic-tag ${p.hue}">${escapeHtml(p.label)}</span></div>
+        <div class="ail-c ail-prob"><div class="ail-title">${escapeHtml(p.title)}</div><div class="ail-sub">${inlineMd(p.problem)}</div></div>
+        <div class="ail-c ail-fix">${p.fix ? inlineMd(p.fix) : '—'}</div>
+        <div class="ail-c ail-does">${p.result ? inlineMd(p.result) : '—'}</div>
+      </div>`
+    )
+    .join('')
+  return `
+    <div class="ai-layout l-ledger">
+      ${aiDeltaStrip(m.comparison)}
+      <div class="ail-table">
+        <div class="ail-row ail-headrow">
+          <div class="ail-c ail-n">#</div>
+          <div class="ail-c ail-tagc">Type</div>
+          <div class="ail-c ail-prob">Problem</div>
+          <div class="ail-c ail-fix">Fix</div>
+          <div class="ail-c ail-does">Does</div>
+        </div>
+        ${rows}
+      </div>
+      ${renderFinalTweaks(m.finalTweaks)}
+      ${aiWorkingBlock(m.working)}
+    </div>`
+}
+
+// LAYOUT 3: split master-detail -------------------------------------------
+function aiLayoutSplit(m) {
+  const list = m.problems
+    .map(
+      (p, i) => `
+      <button class="ais-item ${i === 0 ? 'active' : ''}" data-ais="${i}">
+        <span class="ais-item-n">${i + 1}</span>
+        <span class="aic-tag ${p.hue}">${escapeHtml(p.label)}</span>
+        <span class="ais-item-t">${escapeHtml(p.title)}</span>
+      </button>`
+    )
+    .join('')
+  const panels = m.problems
+    .map(
+      (p, i) => `
+      <div class="ais-panel ${i === 0 ? 'active' : ''}" data-ais-panel="${i}">
+        <div class="ais-panel-head"><span class="aic-tag ${p.hue}">${escapeHtml(p.label)}</span><h3>${escapeHtml(p.title)}</h3></div>
+        <div class="aic-zone aic-problem"><span class="aic-k">Problem</span><div class="aic-v">${inlineMd(p.problem)}</div></div>
+        ${p.fix ? `<div class="aic-zone aic-fix"><span class="aic-k">Fix</span><div class="aic-v">${inlineMd(p.fix)}</div></div>` : ''}
+        ${p.result ? `<div class="aic-zone aic-does"><span class="aic-k">Does</span><div class="aic-v">${inlineMd(p.result)}</div></div>` : ''}
+      </div>`
+    )
+    .join('')
+  return `
+    <div class="ai-layout l-split">
+      <div class="ais-rail">
+        ${aiDeltaStrip(m.comparison)}
+        <div class="ais-list">${list}</div>
+      </div>
+      <div class="ais-detail">
+        ${panels}
+        ${renderFinalTweaks(m.finalTweaks)}
+        ${aiWorkingBlock(m.working)}
+      </div>
+    </div>`
+}
+function wireAISplit(root) {
+  const items = root.querySelectorAll('[data-ais]')
+  const panels = root.querySelectorAll('[data-ais-panel]')
+  items.forEach((it) => {
+    it.addEventListener('click', () => {
+      const idx = it.dataset.ais
+      items.forEach((x) => x.classList.toggle('active', x.dataset.ais === idx))
+      panels.forEach((p) => p.classList.toggle('active', p.dataset.aisPanel === idx))
+    })
+  })
+}
+
+// LAYOUT 4: numbered steps timeline ---------------------------------------
+function aiLayoutSteps(m) {
+  const steps = m.problems
+    .map(
+      (p, i) => `
+      <div class="ait-step ${p.hue}">
+        <div class="ait-mark"><span>${i + 1}</span></div>
+        <div class="ait-body">
+          <div class="ait-head"><span class="aic-tag ${p.hue}">${escapeHtml(p.label)}</span><span class="ait-title">${escapeHtml(p.title)}</span></div>
+          <div class="ait-problem">${inlineMd(p.problem)}</div>
+          ${p.fix ? `<div class="ait-fix"><span class="ait-fix-k">DO</span>${inlineMd(p.fix)}</div>` : ''}
+          ${p.result ? `<div class="ait-does">→ ${inlineMd(p.result)}</div>` : ''}
+        </div>
+      </div>`
+    )
+    .join('')
+  return `<div class="ai-layout l-steps">${aiDeltaStrip(m.comparison)}<div class="ait-track">${steps}</div>${renderFinalTweaks(m.finalTweaks)}${aiWorkingBlock(m.working)}</div>`
+}
+
+function renderAITab(target, r) {
+  const model = buildAIModel(r)
+  if (!model.problems.length) {
     target.innerHTML = `
       <div class="tab-placeholder">
         <div class="ph-icon">◌</div>
@@ -989,40 +1659,22 @@ function renderAITab(target, r) {
       </div>`
     return
   }
-
-  const cards = problems.map((p, i) => {
-    const meta = PROBLEM_TYPE_META[p.type] || PROBLEM_TYPE_META.OTHER
-    return `
-      <div class="widget problem-card ${meta.hue}">
-        <h3 class="widget-h">
-          <span class="problem-num">PROBLEM ${i + 1}</span>
-          <span class="problem-tag ${meta.hue}">${escapeHtml(meta.label)}</span>
-          <span class="problem-title">${escapeHtml(p.title)}</span>
-        </h3>
-        <div class="widget-body problem-body">${renderMarkdown(p.body)}</div>
-      </div>`
-  }).join('')
-
-  const wellBlock = working
-    ? `<div class="widget working-well">
-         <div class="ww-h">WORKING WELL</div>
-         <div class="ww-body">${escapeHtml(working)}</div>
-       </div>`
-    : ''
-
-  target.innerHTML = `
-    <div class="ai-stack">
-      ${cards}
-      ${wellBlock}
-    </div>`
+  const layout = getAILayout()
+  let html
+  if (layout === 'l1') html = aiLayoutCards(model)
+  else if (layout === 'l2') html = aiLayoutLedger(model)
+  else if (layout === 'l3') html = aiLayoutSplit(model)
+  else if (layout === 'l4') html = aiLayoutSteps(model)
+  else html = aiLayoutClassic(model)
+  target.innerHTML = html
+  wireFinalTweaks(target)
+  if (layout === 'l3') wireAISplit(target)
 }
 
 // ─── Dashboard tab (5 widgets) ──────────────────────────────────────
 function renderDashboardTab(target, r) {
   const mode = VALID_MODES.includes(r.mode) ? r.mode : 'both'
   const chainHtml = mode === 'beat' ? '' : renderVocalChain(r.vocalChain, r.vocalChainBuses)
-  const chartHtml = renderTonalChart(r.audio, r.suggestions)
-  const suggestionsHtml = renderSuggestions(r.suggestions || [])
   const alertsHtml = renderAlerts(r, mode)
   const playbackHtml = renderPlaybackWidget(r)
 
@@ -1040,19 +1692,32 @@ function renderDashboardTab(target, r) {
         <h3 class="widget-h">Playback <span class="widget-sub">captured clip</span></h3>
         <div class="widget-body playback-widget">${playbackHtml}</div>
       </div>
+    </div>`
+
+  wireChainTabs(target)
+  wirePlayback(target)
+}
+
+// ─── Extras tab (tonal profile + suggested changes) ─────────────────
+// Moved off the dashboard so the dashboard stays focused on priority
+// alerts, the vocal chain, and playback.
+function renderExtrasTab(target, r) {
+  const chartHtml = renderTonalChart(r.audio, r.suggestions)
+  const suggestionsHtml = renderSuggestions(r.suggestions || [])
+
+  target.innerHTML = `
+    <div class="extras-grid">
       <div class="widget w-tonal">
-        <h3 class="widget-h">Tonal Profile</h3>
+        <h3 class="widget-h">Tonal Profile <span class="widget-sub">per-band dBFS vs genre curve</span></h3>
         <div class="widget-body">${chartHtml || '<div class="alerts-empty">No audio data.</div>'}</div>
       </div>
       <div class="widget w-suggest">
-        <h3 class="widget-h">Suggested Changes</h3>
+        <h3 class="widget-h">Suggested Changes <span class="widget-sub">automated checks</span></h3>
         <div class="widget-body"><div class="suggestions">${suggestionsHtml}</div></div>
       </div>
     </div>`
 
-  wireChainTabs(target)
   wireSuggestions(target)
-  wirePlayback(target)
 }
 
 function renderAlerts(r, mode) {

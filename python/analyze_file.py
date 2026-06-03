@@ -1,12 +1,23 @@
 """Analyze a reference / static audio file and emit the same JSON shape
 as capture_and_analyze.py.
 
-Reuses the local DSP analyzer from `capture_and_analyze._analyze`. Handles
-WAV / FLAC / AIFF natively via soundfile, falls back to librosa (which
-uses audioread + system codecs) for MP3 / M4A / OGG when needed.
+Instead of analyzing the whole file, this extracts a 15-second segment
+(matching the mix capture length) starting at a user-supplied timestamp,
+analyzes THAT window, and also writes the segment out as a 16-bit WAV so
+the Electron side can attach it to Gemini ("AUDIO 2: the reference").
 
-Usage: pass the file path either as the first CLI arg OR via the
-MIXCOACH_REF_PATH environment variable.
+Start point:
+  - MIXCOACH_REF_START_SEC accepts `90`, `90.5`, or `mm:ss` / `h:mm:ss`.
+  - Empty / invalid → 50% into the file (lands mid-song, not on an intro).
+  - Clamped so the 15s window always fits inside the file; files shorter
+    than 15s are used whole.
+
+Clip output path comes from MIXCOACH_REF_CLIP_OUT (falls back to a temp
+file if unset). The source path is the first CLI arg OR MIXCOACH_REF_PATH.
+
+Reuses the local DSP analyzer from `capture_and_analyze._analyze`. Handles
+WAV / FLAC / AIFF natively via soundfile, falls back to librosa for
+MP3 / M4A / OGG when needed.
 
 Always prints a single JSON object on stdout. Never crashes — failures
 become `{"ok": false, "error": ...}`.
@@ -15,6 +26,7 @@ become `{"ok": false, "error": ...}`.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import tempfile
@@ -25,6 +37,10 @@ from typing import Any
 
 # Re-use the analyzer that capture_and_analyze.py already exposes.
 from capture_and_analyze import _analyze, _sanitize
+
+# Segment length must match the mix capture (capture_and_analyze.RECORD_SECONDS)
+# so we A/B equal-length windows.
+SEGMENT_SECONDS = 15
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -61,6 +77,70 @@ def _to_wav_via_librosa(src: Path) -> Path:
     return tmp
 
 
+def _parse_start_sec(raw: str, duration: float) -> float:
+    """Parse the requested start time. Accepts plain seconds (`90`, `90.5`)
+    or colon time (`1:30`, `1:02:03`). Empty / invalid → 50% into the file."""
+    s = (raw or "").strip()
+    default = max(0.0, duration * 0.5)
+    if not s:
+        return default
+    try:
+        if ":" in s:
+            parts = [float(p) for p in s.split(":")]
+            if len(parts) == 2:
+                val = parts[0] * 60 + parts[1]
+            elif len(parts) == 3:
+                val = parts[0] * 3600 + parts[1] * 60 + parts[2]
+            else:
+                val = float(parts[-1])
+        else:
+            val = float(s)
+    except ValueError:
+        return default
+    if not math.isfinite(val) or val < 0:
+        return default
+    return val
+
+
+def _make_clip(readable_wav: Path, out_path: Path, start_raw: str) -> dict[str, Any]:
+    """Read `readable_wav`, slice a SEGMENT_SECONDS window starting at the
+    requested timestamp, write it to `out_path` as 16-bit PCM, and return
+    metadata describing what was actually taken."""
+    import soundfile as sf  # type: ignore
+
+    with sf.SoundFile(str(readable_wav)) as snd:
+        sr = int(snd.samplerate)
+        total_frames = len(snd)
+        data = snd.read(always_2d=True)
+
+    duration = total_frames / sr if sr > 0 else 0.0
+    requested_start = _parse_start_sec(start_raw, duration)
+
+    if duration <= SEGMENT_SECONDS:
+        # File shorter than a full window — use the whole thing.
+        start_sec = 0.0
+        seg = data
+    else:
+        start_sec = requested_start
+        if start_sec + SEGMENT_SECONDS > duration:
+            start_sec = max(0.0, duration - SEGMENT_SECONDS)
+        start_frame = int(round(start_sec * sr))
+        seg_frames = int(round(SEGMENT_SECONDS * sr))
+        seg = data[start_frame:start_frame + seg_frames]
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(out_path), seg, sr, subtype="PCM_16")
+
+    clip_seconds = (len(seg) / sr) if sr > 0 else 0.0
+    return {
+        "clip_path": str(out_path),
+        "start_sec": float(start_sec),
+        "clip_seconds": float(clip_seconds),
+        "source_duration_sec": float(duration),
+        "requested_start_sec": float(requested_start),
+    }
+
+
 def _resolve_path() -> Path | None:
     if len(sys.argv) > 1 and sys.argv[1].strip():
         return Path(sys.argv[1])
@@ -79,14 +159,24 @@ def main() -> None:
         _emit({"ok": False, "error": f"file not found: {src}"})
         return
 
-    tmp_path: Path | None = None
-    analysis_target: Path = src
+    # Where to write the 15s clip we attach to Gemini.
+    clip_out_env = os.environ.get("MIXCOACH_REF_CLIP_OUT", "").strip()
+    if clip_out_env:
+        clip_out = Path(clip_out_env)
+    else:
+        fd, tmp_clip = tempfile.mkstemp(suffix=".wav", prefix="mixcoach_refclip_")
+        os.close(fd)
+        clip_out = Path(tmp_clip)
+    start_raw = os.environ.get("MIXCOACH_REF_START_SEC", "")
 
+    tmp_decoded: Path | None = None  # full-file decode (deleted at the end)
     try:
+        # 1. Get a path libsndfile can read (decode exotic formats first).
+        readable: Path = src
         if not _is_native(src):
             try:
-                tmp_path = _to_wav_via_librosa(src)
-                analysis_target = tmp_path
+                tmp_decoded = _to_wav_via_librosa(src)
+                readable = tmp_decoded
             except Exception as exc:  # noqa: BLE001
                 _emit(
                     {
@@ -97,21 +187,34 @@ def main() -> None:
                 )
                 return
         else:
-            # libsndfile occasionally chokes on exotic WAV subtypes; try
-            # opening it once and re-encode if it fails.
+            # libsndfile occasionally chokes on exotic WAV subtypes; probe it
+            # and re-encode via librosa if the plain wave reader fails.
             try:
-                with wave.open(str(src), "rb") as _:
+                with wave.open(str(src), "rb"):
                     pass
             except Exception:
                 try:
-                    tmp_path = _to_wav_via_librosa(src)
-                    analysis_target = tmp_path
+                    tmp_decoded = _to_wav_via_librosa(src)
+                    readable = tmp_decoded
                 except Exception:
-                    # Let _analyze raise naturally with the real error.
-                    pass
+                    pass  # let _make_clip surface the real error
 
+        # 2. Slice the 15s window at the requested timestamp + write the clip.
         try:
-            payload = _analyze(analysis_target)
+            clip_meta = _make_clip(readable, clip_out, start_raw)
+        except Exception as exc:  # noqa: BLE001
+            _emit(
+                {
+                    "ok": False,
+                    "error": f"clip extraction failed: {exc}",
+                    "trace": traceback.format_exc(),
+                }
+            )
+            return
+
+        # 3. Analyze the CLIP (so the deltas describe the exact 15s we send).
+        try:
+            payload = _analyze(Path(clip_meta["clip_path"]))
         except Exception as exc:  # noqa: BLE001
             payload = {
                 "ok": False,
@@ -119,15 +222,20 @@ def main() -> None:
                 "trace": traceback.format_exc(),
             }
 
-        # Tag the result so the UI can show which file this verdict came from.
+        # Tag the result so the UI + Electron side know what was taken.
         payload.setdefault("source", "local")
         payload["reference_filename"] = src.name
         payload["reference_path"] = str(src)
+        payload["reference_clip_path"] = clip_meta["clip_path"]
+        payload["reference_start_sec"] = clip_meta["start_sec"]
+        payload["reference_clip_seconds"] = clip_meta["clip_seconds"]
+        payload["reference_duration_sec"] = clip_meta["source_duration_sec"]
         _emit(payload)
     finally:
-        if tmp_path is not None:
+        # Only delete the full-file decode; the clip must survive for Electron.
+        if tmp_decoded is not None:
             try:
-                tmp_path.unlink(missing_ok=True)
+                tmp_decoded.unlink(missing_ok=True)
             except Exception:
                 pass
 

@@ -104,19 +104,25 @@ export const YOUR_GEAR = {
   ]
 }
 
-// gemini-1.5-pro was retired by Google. gemini-2.5-pro is paid-only (free
-// tier has limit:0), so default to gemini-2.5-flash — vision-capable, fast,
-// and generous on the free tier. Bump to 2.5-pro if/when billing is enabled.
+// ─────────────────────────────────────────────────────────────────────
+// Model + generation config. Audio understanding + multi-input reasoning
+// are strongest on Pro, so we default there now that MixCoach sends the
+// actual audio clips (mix + reference) for an A/B. Switch to
+// 'gemini-2.5-flash' if billing isn't enabled (Pro's free tier is limit:0).
+// ─────────────────────────────────────────────────────────────────────
+// NOTE: 'gemini-2.5-pro' is the better listener/reasoner, but its FREE tier
+// is limit:0 — on a non-billing key the request hangs instead of returning
+// (endless "Generating AI analysis" spinner). Default to flash, which is
+// free-tier-safe and also audio-capable. Switch to 'gemini-2.5-pro' once
+// billing is enabled on the GEMINI_API_KEY's project.
 const MODEL = 'gemini-2.5-flash'
-// 8192 is gemini-2.5-flash's per-response cap (free tier respects the same
-// cap). With THINKING_BUDGET=0 below, internal reasoning tokens don't eat
-// this budget, so the full response always fits.
-const MAX_OUTPUT_TOKENS = 8192
-// gemini-2.5-flash burns "thinking" tokens against the same output budget
-// by default — that's what was truncating responses at 2048. Setting the
-// thinking budget to 0 disables the reasoning step entirely so every
-// token in the budget goes to the actual answer.
-const THINKING_BUDGET = 0
+// Generous output budget so the full move-by-move answer + Final Tweaks
+// checklist never truncates. Thinking tokens are budgeted separately below.
+const MAX_OUTPUT_TOKENS = 16384
+// A real thinking budget — Pro reasons over the two audio clips, the delta
+// table, the FLP chain, and the screenshot before answering. (-1 = let the
+// model decide dynamically; a fixed number caps it.)
+const THINKING_BUDGET = 8192
 
 export type FlpData = {
   ok: boolean
@@ -252,52 +258,161 @@ function formatVocalVerdict(v: VocalVerdict | null | undefined): string {
   return lines.join('\n')
 }
 
-function formatReferenceBlock(
+// ─────────────────────────────────────────────────────────────────────
+// Reference delta TABLE — the spine of every reference-anchored analysis.
+// Renders my-mix vs reference vs delta vs "direction to move" for every
+// measured dimension, and pre-computes a per-band EQ-move hint. The deltas
+// are GROUND TRUTH for which way to move; Gemini refines them into exact
+// plugin moves and must not contradict the measured direction.
+// ─────────────────────────────────────────────────────────────────────
+const TABLE_BAND_HZ: Record<keyof TonalBands, number> = {
+  sub: 40,
+  bass: 120,
+  low_mid: 350,
+  mid: 1000,
+  high_mid: 4000,
+  air: 12000
+}
+const TABLE_BAND_LABEL: Record<keyof TonalBands, string> = {
+  sub: 'sub (20-60 Hz)',
+  bass: 'bass (60-250 Hz)',
+  low_mid: 'low-mid (250-500 Hz)',
+  mid: 'mid (500-2k Hz)',
+  high_mid: 'high-mid (2-8k Hz)',
+  air: 'air (8-20k Hz)'
+}
+
+function bandEqHint(band: keyof TonalBands, deltaDb: number): string {
+  // deltaDb = my mix − reference. Positive = I'm hotter → cut. Negative =
+  // I'm thinner → boost. Capped at 4 dB so we never suggest a wild move.
+  const hz = TABLE_BAND_HZ[band]
+  const amt = Math.min(Math.abs(deltaDb), 4)
+  const lo = Math.max(1, Math.round(amt - 0.5))
+  const hi = Math.max(lo, Math.round(amt + 0.5))
+  const range = lo === hi ? `${lo} dB` : `${lo}-${hi} dB`
+  const shape = band === 'air' ? 'high shelf @ ~10-12 kHz' : band === 'sub' ? 'low shelf @ ~40-60 Hz' : `bell @ ~${hz} Hz`
+  return deltaDb > 0 ? `cut ${shape} by ${range}` : `boost ${shape} by ${range}`
+}
+
+function num(v: number | null | undefined, digits = 1): string {
+  return v == null || !isFinite(v) ? 'n/a' : v.toFixed(digits)
+}
+
+function formatReferenceTable(
+  audio: AudioData | null | undefined,
   reference: ReferenceAudio | null | undefined,
   comparison: Comparison | null | undefined
 ): string {
   if (!reference?.ok) return ''
   const lines: string[] = []
-  lines.push(`REFERENCE TRACK: "${reference.filename}"`)
-  lines.push('Reference measurements (the sonic target the producer wants to match):')
-  if (reference.integrated_lufs != null)
-    lines.push(`  integrated loudness: ${reference.integrated_lufs.toFixed(2)} LUFS`)
-  if (reference.true_peak_db != null)
-    lines.push(`  true peak: ${reference.true_peak_db.toFixed(2)} dBTP`)
-  if (reference.loudness_range_lra != null)
-    lines.push(`  LRA: ${reference.loudness_range_lra.toFixed(2)} LU`)
-  if (reference.crest_factor_db != null)
-    lines.push(`  crest factor: ${reference.crest_factor_db.toFixed(2)} dB`)
-  if (reference.stereo_width != null)
-    lines.push(`  stereo width: ${reference.stereo_width.toFixed(3)}`)
-  if (reference.tonal_bands) {
-    lines.push('  tonal bands (dBFS):')
-    for (const [band, db] of Object.entries(reference.tonal_bands)) {
-      if (typeof db === 'number') lines.push(`    ${band}: ${db.toFixed(1)}`)
-    }
-  }
-  if (reference.mud_ratio != null)
-    lines.push(`  mud ratio (250-500 Hz): ${reference.mud_ratio.toFixed(3)}`)
-  if (reference.harshness_ratio != null)
-    lines.push(`  harshness ratio (2-5 kHz): ${reference.harshness_ratio.toFixed(3)}`)
-  if (reference.sibilance_ratio != null)
-    lines.push(`  sibilance ratio (6-10 kHz): ${reference.sibilance_ratio.toFixed(3)}`)
+  lines.push(
+    `REFERENCE A/B — your mix vs "${reference.filename}"` +
+      (reference.startSec != null ? ` (15s segment from ${formatClock(reference.startSec)})` : '')
+  )
+  lines.push(
+    'The Delta column is GROUND TRUTH for the DIRECTION to move each dimension. Refine the hints into exact plugin moves; never recommend moving a frequency the opposite way from its measured delta.'
+  )
+  lines.push('')
 
-  if (comparison) {
+  if (!audio?.ok) {
+    // No current-mix numbers (analysis failed) — still give the reference
+    // targets so Gemini can A/B by ear against measured goals.
+    lines.push('My-mix measurements unavailable this run; reference targets only:')
+    lines.push(`  loudness ${num(reference.integrated_lufs)} LUFS · peak ${num(reference.true_peak_db)} dBTP · LRA ${num(reference.loudness_range_lra)} LU · width ${num(reference.stereo_width, 3)}`)
+    return lines.join('\n')
+  }
+
+  lines.push('| Dimension | My mix | Reference | Delta | Move toward ref |')
+  lines.push('|---|---|---|---|---|')
+  const row = (dim: string, mine: string, ref: string, delta: string, move: string): void => {
+    lines.push(`| ${dim} | ${mine} | ${ref} | ${delta} | ${move} |`)
+  }
+  const signed = (v: number, digits = 1, unit = ''): string =>
+    `${v >= 0 ? '+' : ''}${v.toFixed(digits)}${unit ? ' ' + unit : ''}`
+
+  // Loudness
+  if (audio.integrated_lufs != null && reference.integrated_lufs != null) {
+    const d = audio.integrated_lufs - reference.integrated_lufs
+    row(
+      'Integrated LUFS',
+      `${num(audio.integrated_lufs)} LUFS`,
+      `${num(reference.integrated_lufs)} LUFS`,
+      signed(d, 1, 'LU'),
+      d < 0 ? 'push loudness up (limiter input)' : 'pull master gain / limiter input down'
+    )
+  }
+  // True peak
+  if (audio.true_peak_db != null && reference.true_peak_db != null) {
+    const d = audio.true_peak_db - reference.true_peak_db
+    row(
+      'True peak',
+      `${num(audio.true_peak_db)} dBTP`,
+      `${num(reference.true_peak_db)} dBTP`,
+      signed(d, 1, 'dB'),
+      d > 0 ? 'lower ceiling for headroom' : 'matched / safe'
+    )
+  }
+  // LRA
+  if (audio.loudness_range_lra != null && reference.loudness_range_lra != null) {
+    const d = audio.loudness_range_lra - reference.loudness_range_lra
+    row(
+      'LRA (dynamics)',
+      `${num(audio.loudness_range_lra)} LU`,
+      `${num(reference.loudness_range_lra)} LU`,
+      signed(d, 1, 'LU'),
+      d > 0 ? 'tighten / glue (more compression)' : 'ease compression / let it breathe'
+    )
+  }
+  // Stereo width
+  if (audio.stereo_width != null && reference.stereo_width != null) {
+    const d = audio.stereo_width - reference.stereo_width
+    row(
+      'Stereo width',
+      num(audio.stereo_width, 3),
+      num(reference.stereo_width, 3),
+      signed(d, 3),
+      d < 0 ? 'widen sides (keep low end mono)' : 'narrow the sides'
+    )
+  }
+  // Six tonal bands with pre-computed EQ hints
+  const myBands = audio.tonal_bands ?? {}
+  const refBands = reference.tonal_bands ?? {}
+  for (const band of Object.keys(TABLE_BAND_HZ) as Array<keyof TonalBands>) {
+    const mine = myBands[band]
+    const ref = refBands[band]
+    if (typeof mine !== 'number' || typeof ref !== 'number') continue
+    const d = mine - ref
+    const move = Math.abs(d) < 1 ? 'matched' : bandEqHint(band, d)
+    row(TABLE_BAND_LABEL[band], `${num(mine)} dBFS`, `${num(ref)} dBFS`, signed(d, 1, 'dB'), move)
+  }
+  // Energy ratios
+  if (audio.mud_ratio != null && reference.mud_ratio != null) {
+    const d = audio.mud_ratio - reference.mud_ratio
+    row('Mud ratio (250-500)', num(audio.mud_ratio, 3), num(reference.mud_ratio, 3), signed(d, 3), d > 0 ? 'cut low-mid (see band rows)' : 'add low-mid warmth')
+  }
+  if (audio.harshness_ratio != null && reference.harshness_ratio != null) {
+    const d = audio.harshness_ratio - reference.harshness_ratio
+    row('Harshness (2-5k)', num(audio.harshness_ratio, 3), num(reference.harshness_ratio, 3), signed(d, 3), d > 0 ? 'tame 2-5 kHz (dynamic EQ)' : 'add presence ~3 kHz')
+  }
+  if (audio.sibilance_ratio != null && reference.sibilance_ratio != null) {
+    const d = audio.sibilance_ratio - reference.sibilance_ratio
+    row('Sibilance (6-10k)', num(audio.sibilance_ratio, 3), num(reference.sibilance_ratio, 3), signed(d, 3), d > 0 ? 'de-ess harder ~7 kHz' : 'a touch brighter / more air')
+  }
+
+  if (comparison?.summary.length) {
     lines.push('')
-    lines.push(`COMPARISON (your mix → reference "${comparison.reference_filename}"):`)
-    if (comparison.summary.length) {
-      for (const s of comparison.summary) lines.push(`  - ${s}`)
-    } else {
-      lines.push('  - Your mix is already in the same ballpark as the reference on every measured dimension.')
-    }
-    if (comparison.fixes.length) {
-      lines.push('')
-      lines.push('Reference-driven fix candidates (informational — adopt the ones that match what you hear in the screenshot):')
-      for (const f of comparison.fixes) lines.push(`  - ${f}`)
-    }
+    lines.push('Biggest measured gaps, priority order:')
+    for (const s of comparison.summary.slice(0, 5)) lines.push(`  - ${s}`)
   }
   return lines.join('\n')
+}
+
+// mm:ss formatter for clip-start timestamps.
+function formatClock(totalSec: number): string {
+  const s = Math.max(0, Math.round(totalSec))
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return `${m}:${r.toString().padStart(2, '0')}`
 }
 
 type ChainInsert = NonNullable<FlpData['mixer']>[number]
@@ -484,6 +599,44 @@ type GeminiResponse = {
   error?: { message?: string }
 }
 
+// Read a WAV from disk and wrap it as a Gemini inline audio part. 15s clips
+// are ~2-3 MB, well under the inline request ceiling, so base64 is fine.
+// Returns null (and logs) if the file is missing/empty so the pipeline never
+// breaks just because audio couldn't be attached.
+async function readAudioInlinePart(
+  path: string | null | undefined,
+  label: string
+): Promise<GeminiPart | null> {
+  if (!path) return null
+  try {
+    const buf = await readFile(path)
+    if (!buf.length) {
+      console.warn(`[gemini] ${label} audio at ${path} was empty — skipping attach`)
+      return null
+    }
+    return { inline_data: { mime_type: 'audio/wav', data: buf.toString('base64') } }
+  } catch (err) {
+    console.warn(`[gemini] could not attach ${label} audio (${path}): ${(err as Error).message}`)
+    return null
+  }
+}
+
+// Log a one-line manifest of the request parts so we can confirm — in the
+// terminal — that the audio clips and screenshot are actually attached.
+function logParts(label: string, parts: GeminiPart[]): void {
+  const manifest = parts.map((p) => {
+    if ('inline_data' in p) {
+      const kb = Math.round((p.inline_data.data.length * 0.75) / 1024)
+      return `[${p.inline_data.mime_type} ${kb}KB]`
+    }
+    const head = p.text.split('\n', 1)[0].slice(0, 32)
+    return `[text ${p.text.length}c "${head}…"]`
+  })
+  const audioCount = parts.filter((p) => 'inline_data' in p && p.inline_data.mime_type.startsWith('audio/')).length
+  const imgCount = parts.filter((p) => 'inline_data' in p && p.inline_data.mime_type.startsWith('image/')).length
+  console.log(`[gemini] ${label}: ${parts.length} parts (${audioCount} audio, ${imgCount} image) → ${manifest.join(' ')}`)
+}
+
 async function geminiRequest(
   apiKey: string,
   systemPrompt: string,
@@ -559,6 +712,9 @@ export async function callGemini(args: {
   vocalVerdict: VocalVerdict | null
   reference: ReferenceAudio | null
   comparison: Comparison | null
+  // Path to the recorded 15s mix WAV (capture_and_analyze persists it). Sent
+  // to Gemini as "AUDIO 1" so it can hear the mix, not just read the numbers.
+  mixWavPath: string | null
   signal?: AbortSignal
 }): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY?.trim()
@@ -570,25 +726,56 @@ export async function callGemini(args: {
   const suggestionsText = formatSuggestions(args.suggestions)
   const vocalChainText = formatVocalChain(extractVocalChain(args.flp))
   const verdictText = formatVocalVerdict(args.vocalVerdict)
-  const referenceText = formatReferenceBlock(args.reference, args.comparison)
+  const referenceTable = formatReferenceTable(args.audio, args.reference, args.comparison)
   const modeBanner = `ANALYSIS MODE: ${args.mode.toUpperCase()}`
+
+  // Attach the actual audio. AUDIO 1 = my mix, AUDIO 2 = the reference clip.
+  const mixPart = await readAudioInlinePart(args.mixWavPath, 'mix')
+  const refClipPath = args.reference?.ok ? args.reference.clipPath : null
+  const refPart = await readAudioInlinePart(refClipPath, 'reference')
 
   const parts: GeminiPart[] = []
   parts.push({ text: modeBanner })
+
+  // 1. Reference delta table first — it's the spine of the response.
+  if (referenceTable) parts.push({ text: referenceTable })
+
+  // 2. The audio itself, clearly labeled so Gemini can A/B the two clips.
+  if (mixPart) {
+    parts.push({
+      text: 'AUDIO 1 — MY MIX: the 15-second capture you are coaching. LISTEN to this for tonal/perceptual calls (mud, harshness, vocal clarity, balance, arrangement). For stereo width, true peak, LUFS and mono compatibility, trust the DSP numbers below — the audio is mono-downsampled and you cannot hear those from it.'
+    })
+    parts.push(mixPart)
+  } else {
+    parts.push({ text: 'AUDIO 1 — MY MIX: unavailable (could not attach the captured WAV). Work from the DSP numbers + screenshot.' })
+  }
+  if (refPart) {
+    const ref = args.reference as ReferenceAudio
+    const where = ref.startSec != null ? ` (15s from ${formatClock(ref.startSec)})` : ''
+    parts.push({
+      text: `AUDIO 2 — THE REFERENCE "${ref.filename}"${where}: the sonic target. A/B it against AUDIO 1 by ear AND against the delta table. Describe the specific differences you hear, then translate each into an exact move.`
+    })
+    parts.push(refPart)
+  }
+
+  // 3. Screenshot.
   if (args.screenshot?.ok && args.screenshot.base64) {
+    parts.push({ text: 'SCREENSHOT of the FL Studio window:' })
     parts.push({
       inline_data: { mime_type: args.screenshot.mimeType, data: args.screenshot.base64 }
     })
   } else {
     parts.push({ text: 'SCREENSHOT: unavailable.' })
   }
+
+  // 4. Verdict + full chain context + DSP numbers + flagged issues.
   if (verdictText) parts.push({ text: verdictText })
-  if (referenceText) parts.push({ text: referenceText })
   parts.push({ text: `VOCAL CHAIN (in routing order):\n${vocalChainText}` })
-  parts.push({ text: `FLP CHAIN:\n${flpText}` })
-  parts.push({ text: `AUDIO ANALYSIS:\n${audioText}` })
+  parts.push({ text: `FULL FLP MIXER (every insert, every plugin in slot order):\n${flpText}` })
+  parts.push({ text: `AUDIO ANALYSIS (DSP numbers — authoritative for level/stereo facts):\n${audioText}` })
   parts.push({ text: suggestionsText })
 
+  logParts('analysis', parts)
   return await geminiRequest(apiKey, systemPrompt, parts, args.signal)
 }
 
@@ -609,6 +796,10 @@ export type ChatContext = {
   vocalVerdict: VocalVerdict | null
   reference: ReferenceAudio | null
   comparison: Comparison | null
+  // Audio paths so follow-up chat can still HEAR the clips (e.g. "what about
+  // the hi-hats"). Mix = the recorded capture; reference = the 15s segment.
+  mixWavPath: string | null
+  referenceClipPath: string | null
 }
 
 function formatChatContext(ctx: ChatContext): string {
@@ -617,15 +808,15 @@ function formatChatContext(ctx: ChatContext): string {
   const suggestionsText = formatSuggestions(ctx.suggestions)
   const vocalChainText = formatVocalChain(extractVocalChain(ctx.flp))
   const verdictText = formatVocalVerdict(ctx.vocalVerdict)
-  const referenceText = formatReferenceBlock(ctx.reference, ctx.comparison)
+  const referenceTable = formatReferenceTable(ctx.audio, ctx.reference, ctx.comparison)
   const analysis = ctx.analysisText?.trim() || '(no prior analysis — chat started without a run)'
   const blocks: string[] = [`ANALYSIS MODE: ${ctx.mode.toUpperCase()}`]
   if (verdictText) blocks.push(verdictText)
-  if (referenceText) blocks.push(referenceText)
+  if (referenceTable) blocks.push(referenceTable)
   blocks.push(
     `VOCAL CHAIN (in routing order):\n${vocalChainText}`,
-    `FLP CHAIN:\n${flpText}`,
-    `AUDIO ANALYSIS:\n${audioText}`,
+    `FULL FLP MIXER:\n${flpText}`,
+    `AUDIO ANALYSIS (DSP numbers):\n${audioText}`,
     suggestionsText,
     `PRIOR AI ANALYSIS (already shown to the producer):\n${analysis}`
   )
@@ -645,10 +836,44 @@ export async function callGeminiChat(args: {
   const contextBlock = formatChatContext(args.context)
   const systemPrompt = `${chatPrompt}\n\n---\nCURRENT SESSION CONTEXT (ground truth for every reply):\n${contextBlock}`
 
-  const contents = args.messages.map((m) => ({
-    role: m.role === 'user' ? 'user' : 'model',
-    parts: [{ text: m.text }]
-  }))
+  // Keep the audio in context: lead with a user turn carrying both clips +
+  // a model ack, so the engineer can still "hear" the mix/reference when the
+  // producer asks perceptual follow-ups ("what about the hi-hats?").
+  const mixPart = await readAudioInlinePart(args.context.mixWavPath, 'chat-mix')
+  const refPart = args.context.reference?.ok
+    ? await readAudioInlinePart(args.context.referenceClipPath, 'chat-reference')
+    : null
+
+  type ChatTurn = { role: 'user' | 'model'; parts: GeminiPart[] }
+  const contents: ChatTurn[] = []
+  if (mixPart || refPart) {
+    const lead: GeminiPart[] = []
+    if (mixPart) {
+      lead.push({ text: 'AUDIO 1 — MY MIX (the captured clip for this session):' })
+      lead.push(mixPart)
+    }
+    if (refPart) {
+      lead.push({ text: `AUDIO 2 — THE REFERENCE "${(args.context.reference as ReferenceAudio).filename}":` })
+      lead.push(refPart)
+    }
+    lead.push({ text: 'Keep these clips in mind for follow-up questions about the sound.' })
+    contents.push({ role: 'user', parts: lead })
+    contents.push({
+      role: 'model',
+      parts: [
+        {
+          text: `Got it — I can hear your mix${refPart ? ' and the reference' : ''} and I have the session data. Ask away.`
+        }
+      ]
+    })
+  }
+  for (const m of args.messages) {
+    contents.push({ role: m.role === 'user' ? 'user' : 'model', parts: [{ text: m.text }] })
+  }
+
+  if (mixPart || refPart) {
+    logParts('chat-context', [...(contents[0]?.parts ?? [])])
+  }
 
   const body = {
     systemInstruction: { role: 'system', parts: [{ text: systemPrompt }] },

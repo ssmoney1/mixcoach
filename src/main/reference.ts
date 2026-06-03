@@ -4,13 +4,27 @@
 // can tell them what to change to sound more like the reference.
 
 import { spawn } from 'node:child_process'
-import { basename } from 'node:path'
+import { basename, join } from 'node:path'
+import { app } from 'electron'
 import type { AudioData } from './gemini'
 import { pythonExecutable, pythonRoot, CancelledError } from './pipeline'
 
 export type ReferenceAudio = AudioData & {
   filename: string
   filepath: string
+  // Path to the 15s WAV segment extracted from the reference (the audio we
+  // attach to Gemini as "AUDIO 2"). null if extraction failed.
+  clipPath: string | null
+  // Where in the source file the 15s window was taken from (seconds), and
+  // the source's total duration — surfaced to the UI / prompt for context.
+  startSec: number | null
+  durationSec: number | null
+}
+
+// Stable on-disk location for the extracted reference clip. Overwritten each
+// time a new reference (or a new timestamp) is chosen.
+function referenceClipPath(): string {
+  return join(app.getPath('userData'), 'reference_clip.wav')
 }
 
 let cachedReference: ReferenceAudio | null = null
@@ -25,27 +39,52 @@ export function clearReference(): void {
 
 export async function setReferenceFromFile(
   filePath: string,
+  // Raw start-time string from the UI: plain seconds (`90`) or `mm:ss`
+  // (`1:30`). Empty / undefined → Python defaults to 50% into the file.
+  start?: string,
   signal?: AbortSignal
 ): Promise<ReferenceAudio> {
-  const audio = await runAnalyzeFile(filePath, signal)
+  const clipOut = referenceClipPath()
+  const audio = await runAnalyzeFile(filePath, start, clipOut, signal)
   if (!audio.ok) {
     throw new Error(audio.error ?? 'reference analysis failed')
+  }
+  // analyze_file.py adds reference_clip_path / reference_start_sec /
+  // reference_duration_sec on top of the AudioData shape.
+  const raw = audio as AudioData & {
+    reference_clip_path?: unknown
+    reference_start_sec?: unknown
+    reference_duration_sec?: unknown
   }
   const ref: ReferenceAudio = {
     ...audio,
     filename: basename(filePath),
-    filepath: filePath
+    filepath: filePath,
+    clipPath: typeof raw.reference_clip_path === 'string' ? raw.reference_clip_path : null,
+    startSec: typeof raw.reference_start_sec === 'number' ? raw.reference_start_sec : null,
+    durationSec: typeof raw.reference_duration_sec === 'number' ? raw.reference_duration_sec : null
   }
   cachedReference = ref
   return ref
 }
 
-function runAnalyzeFile(filePath: string, signal?: AbortSignal): Promise<AudioData> {
+function runAnalyzeFile(
+  filePath: string,
+  start: string | undefined,
+  clipOut: string,
+  signal?: AbortSignal
+): Promise<AudioData> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new CancelledError())
     const proc = spawn(pythonExecutable(), ['analyze_file.py'], {
       cwd: pythonRoot(),
-      env: { ...process.env, PYTHONUNBUFFERED: '1', MIXCOACH_REF_PATH: filePath },
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: '1',
+        MIXCOACH_REF_PATH: filePath,
+        MIXCOACH_REF_START_SEC: start ?? '',
+        MIXCOACH_REF_CLIP_OUT: clipOut
+      },
       windowsHide: true
     })
     let stdout = ''

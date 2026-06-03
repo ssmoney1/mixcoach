@@ -183,6 +183,10 @@ async function trigger(mode: Mode = 'both'): Promise<void> {
     if (err instanceof CancelledError || (err as { name?: string })?.name === 'AbortError') {
       emit('mc:cancelled', { at: new Date().toISOString() })
     } else {
+      // Surface the failure in the dev terminal — otherwise a Gemini error
+      // (quota, bad key, timeout) only reaches the renderer and is easy to
+      // miss while debugging a "stuck" UI.
+      console.error('[mixcoach] pipeline error:', (err as Error).message)
       emit('mc:error', { message: (err as Error).message })
     }
   } finally {
@@ -231,8 +235,16 @@ app.whenReady().then(() => {
       return null
     }
   })
-  ipcMain.handle('mc:pickReference', async () => {
+  ipcMain.handle('mc:pickReference', async (_e, startSec?: unknown) => {
     if (!mainWindow) return { ok: false, error: 'window not ready' }
+    // Raw start-time string from the UI (`90` or `1:30`). Python parses and
+    // clamps it; empty → 50% into the file.
+    const start =
+      typeof startSec === 'string'
+        ? startSec
+        : typeof startSec === 'number'
+          ? String(startSec)
+          : undefined
     const result = await dialog.showOpenDialog(mainWindow, {
       title: 'Choose reference track',
       buttonLabel: 'Use as reference',
@@ -248,7 +260,7 @@ app.whenReady().then(() => {
       return { ok: false, cancelled: true }
     }
     try {
-      const ref = await setReferenceFromFile(result.filePaths[0])
+      const ref = await setReferenceFromFile(result.filePaths[0], start)
       return { ok: true, reference: ref }
     } catch (err) {
       return { ok: false, error: (err as Error).message }
@@ -271,7 +283,9 @@ app.whenReady().then(() => {
       mode: 'both' as const,
       vocalVerdict: null,
       reference: getReference(),
-      comparison: null
+      comparison: null,
+      mixWavPath: null,
+      referenceClipPath: getReference()?.clipPath ?? null
     }
     return await callGeminiChat({ messages, context })
   })

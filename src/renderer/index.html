@@ -9,6 +9,9 @@
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:;"
     />
     <link rel="stylesheet" href="./styles.css" />
+    <!-- Design-exploration themes. Inert until <body> gets a theme-* class
+         (the preview theme switcher sets it). No effect on the default app. -->
+    <link rel="stylesheet" href="./themes.css" />
   </head>
   <body>
     <div class="app-shell">
@@ -62,6 +65,9 @@
             <li><button class="nav-item" data-tab="ai">
               <span class="nav-icon">◌</span><span class="nav-label">AI Analysis</span>
             </button></li>
+            <li><button class="nav-item" data-tab="extras">
+              <span class="nav-icon">▦</span><span class="nav-label">Extras</span>
+            </button></li>
             <li><button class="nav-item" data-tab="chain">
               <span class="nav-icon">⇄</span><span class="nav-label">Chain Edits</span>
             </button></li>
@@ -73,6 +79,9 @@
             </button></li>
             <li><button class="nav-item" data-tab="compare">
               <span class="nav-icon">⇆</span><span class="nav-label">Compare</span>
+            </button></li>
+            <li><button class="nav-item" data-tab="settings">
+              <span class="nav-icon">⚙</span><span class="nav-label">Settings</span>
             </button></li>
           </ul>
 

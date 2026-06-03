@@ -48,7 +48,9 @@ export function setChatMode(mode: Mode): void {
       mode,
       vocalVerdict: null,
       reference: null,
-      comparison: null
+      comparison: null,
+      mixWavPath: null,
+      referenceClipPath: null
     }
   }
 }
@@ -274,6 +276,10 @@ export async function runPipeline(
   const reference = getReference()
   const comparison = compareToReference(audio.ok ? audio : null, reference)
 
+  // The mix WAV that capture_and_analyze persisted — attached to Gemini as
+  // AUDIO 1 (only when the capture/analysis succeeded and the file exists).
+  const mixWavPath = audio.ok ? lastWavPath() : null
+
   onStatus({ phase: 'gemini' })
   const text = await callGemini({
     screenshot,
@@ -284,6 +290,7 @@ export async function runPipeline(
     vocalVerdict,
     reference,
     comparison,
+    mixWavPath,
     signal
   })
 
@@ -297,7 +304,9 @@ export async function runPipeline(
     mode,
     vocalVerdict,
     reference,
-    comparison
+    comparison,
+    mixWavPath,
+    referenceClipPath: reference?.ok ? reference.clipPath : null
   }
 
   return {
