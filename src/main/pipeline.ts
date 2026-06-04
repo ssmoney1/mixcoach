@@ -65,7 +65,10 @@ export type Status =
   | { phase: 'analyzing' }
   // ROEX_DISABLED — was `'roex'` while waiting on the cloud API.
   | { phase: 'flp' }
-  | { phase: 'gemini' }
+  // `retry` is present only while waiting out a transient Gemini error
+  // (e.g. a 503 "spike in usage"), so the UI can show a countdown instead
+  // of a frozen "Generating analysis…" spinner.
+  | { phase: 'gemini'; retry?: { attempt: number; maxAttempts: number; status: number; waitMs: number } }
   | { phase: 'done' }
   | { phase: 'busy' }
 
@@ -321,7 +324,8 @@ export async function runPipeline(
     comparison,
     mixWavPath,
     pluginEqText: flPlugins.text,
-    signal
+    signal,
+    onRetry: (info) => onStatus({ phase: 'gemini', retry: info })
   })
 
   onStatus({ phase: 'done' })

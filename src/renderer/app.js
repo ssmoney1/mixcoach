@@ -454,6 +454,15 @@ function statusLine(s) {
     case 'flp':
       return { text: 'Parsing FL Studio project…', detail: '' }
     case 'gemini':
+      if (s.retry && typeof s.retry === 'object') {
+        const r = s.retry
+        const waitSec = Math.round((r.waitMs || 0) / 1000)
+        const label = r.status === 503 ? 'Gemini busy (spike in usage)' : r.status ? `Gemini busy (${r.status})` : 'Connection hiccup'
+        return {
+          text: `${label} — retrying…`,
+          detail: `attempt ${r.attempt} of ${r.maxAttempts}${waitSec ? `, retrying in ${waitSec}s` : ''}`
+        }
+      }
       return { text: 'Generating AI analysis…', detail: '' }
     case 'busy':
       return { text: 'Already analyzing… please wait.', detail: '' }

@@ -630,11 +630,72 @@ function logParts(label: string, parts: GeminiPart[]): void {
   console.log(`[gemini] ${label}: ${parts.length} parts (${audioCount} audio, ${imgCount} image) → ${manifest.join(' ')}`)
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Retry policy. Gemini's most common failure on a busy day is a transient
+// 503 "the model is overloaded" (a.k.a. "spike in usage") — the request
+// never gets processed and clears on its own within seconds. 429 (rate
+// limit) and 500/502/504 (gateway hiccups) are the same kind of "try again"
+// signal. A single one of these used to throw away the whole 15s capture;
+// now we back off and retry instead.
+// ─────────────────────────────────────────────────────────────────────
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
+const MAX_ATTEMPTS = 4
+const BASE_BACKOFF_MS = 1000
+const MAX_BACKOFF_MS = 30_000
+// Per-attempt hard timeout so a stalled upload/response can never hang the
+// pipeline forever. The user's cancel signal still aborts immediately.
+const TIMEOUT_MS = 90_000
+
+// Reported to the caller before each backoff so the UI can show a live
+// "Gemini busy, retrying…" state instead of a frozen spinner. status === 0
+// means a network error / timeout (no HTTP response).
+export type RetryInfo = {
+  attempt: number
+  maxAttempts: number
+  waitMs: number
+  status: number
+}
+
+// Exponential backoff for attempt N (1-indexed): 1s, 2s, 4s, … capped.
+function backoffMs(attempt: number): number {
+  return Math.min(BASE_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS)
+}
+
+// Honor a server-sent Retry-After (delta-seconds form) when present, capped
+// so a hostile/huge value can't strand the user. Returns null for the
+// HTTP-date form or anything unparseable, so we fall back to plain backoff.
+function parseRetryAfter(res: Awaited<ReturnType<typeof fetch>>): number | null {
+  const h = res.headers.get('retry-after')
+  if (!h) return null
+  const secs = Number(h)
+  if (Number.isFinite(secs) && secs >= 0) return Math.min(secs * 1000, MAX_BACKOFF_MS)
+  return null
+}
+
+// Sleep that rejects with an AbortError the instant the user cancels, so a
+// pending backoff never delays a cancellation. (index.ts treats AbortError
+// as a clean cancel.)
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException('aborted', 'AbortError'))
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer)
+        reject(new DOMException('aborted', 'AbortError'))
+      },
+      { once: true }
+    )
+  })
+}
+
 async function geminiRequest(
   apiKey: string,
   systemPrompt: string,
   userParts: GeminiPart[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onRetry?: (info: RetryInfo) => void
 ): Promise<string> {
   const body = {
     systemInstruction: { role: 'system', parts: [{ text: systemPrompt }] },
@@ -646,54 +707,87 @@ async function geminiRequest(
     }
   }
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`
-  // Hard timeout so a stalled upload/response can never hang the pipeline
-  // forever (the "stuck loading, can't cancel" symptom). The user's cancel
-  // signal still aborts immediately — whichever fires first wins.
-  const ctrl = new AbortController()
-  const TIMEOUT_MS = 90_000
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
-  const forwardAbort = (): void => ctrl.abort()
-  if (signal) {
-    if (signal.aborted) ctrl.abort()
-    else signal.addEventListener('abort', forwardAbort, { once: true })
-  }
-  let res: Awaited<ReturnType<typeof fetch>>
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: ctrl.signal
-    })
-  } catch (err) {
-    // Distinguish our timeout from a user-initiated cancel.
-    if (ctrl.signal.aborted && !signal?.aborted) {
-      throw new Error(`Gemini request timed out after ${TIMEOUT_MS / 1000}s`)
+
+  let lastErr: Error | null = null
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    // Fresh per-attempt timeout controller, chained to the user's cancel.
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
+    const forwardAbort = (): void => ctrl.abort()
+    if (signal) {
+      if (signal.aborted) ctrl.abort()
+      else signal.addEventListener('abort', forwardAbort, { once: true })
     }
-    throw err
-  } finally {
-    clearTimeout(timer)
-    signal?.removeEventListener('abort', forwardAbort)
-  }
-  const json = (await res.json()) as GeminiResponse
-  if (!res.ok) {
-    throw new Error(`Gemini ${res.status}: ${json.error?.message ?? 'request failed'}`)
-  }
-  const blocked = json.promptFeedback?.blockReason
-  if (blocked) throw new Error(`Gemini blocked the request: ${blocked}`)
-  const candidate = json.candidates?.[0]
-  const text = candidate?.content?.parts?.map((p) => p.text ?? '').join('') ?? ''
-  if (!text.trim()) {
-    throw new Error('Gemini returned an empty response')
-  }
-  const finish = candidate?.finishReason
-  if (finish && finish !== 'STOP') {
-    console.warn(`[gemini] finishReason=${finish} (response may be incomplete)`)
-    if (finish === 'MAX_TOKENS') {
-      return text.trim() + '\n\n_(response truncated at token limit — raise MAX_OUTPUT_TOKENS)_'
+
+    let res: Awaited<ReturnType<typeof fetch>> | null = null
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: ctrl.signal
+      })
+    } catch (err) {
+      // A user-initiated cancel propagates immediately — never retried.
+      if (signal?.aborted) throw err
+      // Our own timeout, or a network error (DNS/reset) — both transient.
+      lastErr = ctrl.signal.aborted
+        ? new Error(`Gemini request timed out after ${TIMEOUT_MS / 1000}s`)
+        : (err as Error)
+    } finally {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', forwardAbort)
     }
+
+    // No HTTP response (timeout / network) → back off and retry, or give up.
+    if (!res) {
+      if (attempt < MAX_ATTEMPTS) {
+        const waitMs = backoffMs(attempt)
+        console.warn(`[gemini] ${lastErr?.message ?? 'request failed'} — retry ${attempt}/${MAX_ATTEMPTS - 1} in ${waitMs}ms`)
+        onRetry?.({ attempt, maxAttempts: MAX_ATTEMPTS, waitMs, status: 0 })
+        await abortableSleep(waitMs, signal)
+        continue
+      }
+      break
+    }
+
+    const json = (await res.json()) as GeminiResponse
+    if (!res.ok) {
+      const status = res.status
+      const msg = json.error?.message ?? 'request failed'
+      // Transient server-side status → back off and retry.
+      if (RETRYABLE_STATUS.has(status) && attempt < MAX_ATTEMPTS) {
+        lastErr = new Error(`Gemini ${status}: ${msg}`)
+        const waitMs = parseRetryAfter(res) ?? backoffMs(attempt)
+        console.warn(`[gemini] ${status}: ${msg} — retry ${attempt}/${MAX_ATTEMPTS - 1} in ${waitMs}ms`)
+        onRetry?.({ attempt, maxAttempts: MAX_ATTEMPTS, waitMs, status })
+        await abortableSleep(waitMs, signal)
+        continue
+      }
+      // Non-retryable (e.g. 400/401/403) or out of attempts → fail now.
+      throw new Error(`Gemini ${status}: ${msg}`)
+    }
+
+    const blocked = json.promptFeedback?.blockReason
+    if (blocked) throw new Error(`Gemini blocked the request: ${blocked}`)
+    const candidate = json.candidates?.[0]
+    const text = candidate?.content?.parts?.map((p) => p.text ?? '').join('') ?? ''
+    if (!text.trim()) {
+      throw new Error('Gemini returned an empty response')
+    }
+    const finish = candidate?.finishReason
+    if (finish && finish !== 'STOP') {
+      console.warn(`[gemini] finishReason=${finish} (response may be incomplete)`)
+      if (finish === 'MAX_TOKENS') {
+        return text.trim() + '\n\n_(response truncated at token limit — raise MAX_OUTPUT_TOKENS)_'
+      }
+    }
+    return text.trim()
   }
-  return text.trim()
+
+  // Every attempt hit a transient failure.
+  throw lastErr ??
+    new Error(`Gemini unavailable after ${MAX_ATTEMPTS} attempts (the model stayed overloaded — try again in a minute)`)
 }
 
 export async function callGemini(args: {
@@ -711,6 +805,9 @@ export async function callGemini(args: {
   // Null when no supported plugin is found or the FL bridge is offline.
   pluginEqText?: string | null
   signal?: AbortSignal
+  // Called before each backoff when Gemini returns a transient error, so the
+  // pipeline can surface a live "busy, retrying…" status to the UI.
+  onRetry?: (info: RetryInfo) => void
 }): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY?.trim()
   if (!apiKey) throw new Error('GEMINI_API_KEY is not set')
@@ -765,7 +862,7 @@ export async function callGemini(args: {
   parts.push({ text: suggestionsText })
 
   logParts('analysis', parts)
-  return await geminiRequest(apiKey, systemPrompt, parts, args.signal)
+  return await geminiRequest(apiKey, systemPrompt, parts, args.signal, args.onRetry)
 }
 
 // ─────────────────────────────────────────────────────────────────────
