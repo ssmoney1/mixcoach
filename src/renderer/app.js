@@ -1649,18 +1649,21 @@ const PROBLEM_TYPE_META = {
   OTHER:           { label: 'Other',           hue: 'hue-other' }
 }
 
-// Active AI-tab layout. 'classic' is the shipped design; l1-l4 are the
-// preview drafts the design switcher can select (browser preview only — in
-// Electron localStorage has no value so it stays 'classic').
+// Active AI-tab layout. Steps ('l4') is THE shipped layout — the real app
+// always renders it. Only the browser design-preview build (installPreviewMock,
+// which sets window.__mixcoachPreview) may override it via the layout switcher,
+// so a stale localStorage value can never change the layout in Electron.
 function getAILayout() {
-  // 'l4' (Steps) is the shipped layout. The browser preview switcher can
-  // override via window.__aiLayout / localStorage for design exploration.
-  if (typeof window !== 'undefined' && window.__aiLayout) return window.__aiLayout
-  try {
-    return localStorage.getItem('mixcoach.aiLayout') || 'l4'
-  } catch {
-    return 'l4'
+  if (typeof window !== 'undefined' && window.__mixcoachPreview) {
+    if (window.__aiLayout) return window.__aiLayout
+    try {
+      return localStorage.getItem('mixcoach.aiLayout') || 'l4'
+    } catch {
+      return 'l4'
+    }
   }
+  // Real Electron app: hard-locked to Steps so it can't drift or revert.
+  return 'l4'
 }
 
 // Pull the terse Problem / Fix / Does lines out of a problem body. Falls back
