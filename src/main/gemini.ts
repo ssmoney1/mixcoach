@@ -20,7 +20,7 @@ export const VOCAL_CHAIN_BUSES: number[] = [13, 16, 5, 8]
 export const YOUR_GEAR = {
   monitors: 'Yamaha HS7 (primary), Yamaha C80 (secondary)',
   interface: 'Universal Audio Apollo Solo',
-  daw: 'FL Studio 21',
+  daw: 'FL Studio 2025',
   // Keep this neutral. Treat every session as its own song with its own
   // aesthetic — don't pin the analysis to any one artist's sound.
   genre:
