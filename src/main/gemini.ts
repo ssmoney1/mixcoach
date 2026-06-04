@@ -110,12 +110,30 @@ export const YOUR_GEAR = {
 // actual audio clips (mix + reference) for an A/B. Switch to
 // 'gemini-2.5-flash' if billing isn't enabled (Pro's free tier is limit:0).
 // ─────────────────────────────────────────────────────────────────────
-// NOTE: 'gemini-2.5-pro' is the better listener/reasoner, but its FREE tier
-// is limit:0 — on a non-billing key the request hangs instead of returning
-// (endless "Generating AI analysis" spinner). Default to flash, which is
-// free-tier-safe and also audio-capable. Switch to 'gemini-2.5-pro' once
-// billing is enabled on the GEMINI_API_KEY's project.
-const MODEL = 'gemini-2.5-flash'
+// The model is user-selectable at runtime from the Settings tab — the
+// renderer persists the choice and pushes it over IPC → setGeminiModel().
+// Flash is the safe default (free-tier-safe, fast, cheap). Pro is the
+// stronger listener/reasoner for the audio A/B but is slower, pricier, and
+// needs billing enabled (its free tier is limit:0). Both are audio-capable.
+// Keep this list in sync with GEMINI_MODELS in the renderer (app.js).
+export const GEMINI_MODELS = [
+  { id: 'gemini-2.5-flash', name: 'Flash' },
+  { id: 'gemini-2.5-pro', name: 'Pro' }
+] as const
+export type GeminiModelId = (typeof GEMINI_MODELS)[number]['id']
+const DEFAULT_MODEL: GeminiModelId = 'gemini-2.5-flash'
+let activeModel: GeminiModelId = DEFAULT_MODEL
+
+// Set by the renderer over IPC when the producer picks a model. Unknown ids
+// are ignored so a stale/garbled value can never break the request; returns
+// the model actually in effect.
+export function setGeminiModel(id: string): GeminiModelId {
+  if (GEMINI_MODELS.some((m) => m.id === id)) activeModel = id as GeminiModelId
+  return activeModel
+}
+export function getGeminiModel(): GeminiModelId {
+  return activeModel
+}
 // Generous output budget so the full move-by-move answer + Final Tweaks
 // checklist never truncates. Thinking tokens are budgeted separately below.
 const MAX_OUTPUT_TOKENS = 16384
@@ -706,7 +724,7 @@ async function geminiRequest(
       thinkingConfig: { thinkingBudget: THINKING_BUDGET }
     }
   }
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${encodeURIComponent(apiKey)}`
 
   let lastErr: Error | null = null
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -974,7 +992,7 @@ export async function callGeminiChat(args: {
       thinkingConfig: { thinkingBudget: THINKING_BUDGET }
     }
   }
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${encodeURIComponent(apiKey)}`
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

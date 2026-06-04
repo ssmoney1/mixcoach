@@ -15,6 +15,9 @@ type Mode = 'vocal' | 'beat' | 'both'
 const api = {
   trigger: (mode: Mode = 'both') => ipcRenderer.invoke('mc:trigger', mode),
   setMode: (mode: Mode): Promise<boolean> => ipcRenderer.invoke('mc:setMode', mode),
+  // Persisted Gemini model choice (e.g. 'gemini-2.5-flash' | 'gemini-2.5-pro').
+  // Returns the model actually in effect after main-side validation.
+  setModel: (model: string): Promise<string> => ipcRenderer.invoke('mc:setModel', model),
   cancel: (): Promise<boolean> => ipcRenderer.invoke('mc:cancel'),
   hide: () => ipcRenderer.invoke('mc:hide'),
   minimize: () => ipcRenderer.invoke('mc:minimize'),

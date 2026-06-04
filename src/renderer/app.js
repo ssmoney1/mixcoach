@@ -171,6 +171,7 @@ function installPreviewMock() {
       setTimeout(() => emit('mc:result', { ...SAMPLE_RESULT, reference: ref, mode: currentMode }), 250 * (phases.length + 1))
     },
     setMode: async () => true,
+    setModel: async (id) => id,
     cancel: async () => true,
     hide: async () => {},
     minimize: async () => {},
@@ -332,6 +333,39 @@ function applyAppTheme(id) {
   try { localStorage.setItem(APP_THEME_KEY, theme.id) } catch {}
 }
 
+// ─── Gemini model selection ─────────────────────────────────────────
+// Producer picks the engine in Settings; persisted here and pushed to main
+// over IPC (mirrors the analysis-mode pattern). Keep ids in sync with
+// GEMINI_MODELS in src/main/gemini.ts.
+const MODEL_KEY = 'mixcoach.geminiModel'
+const GEMINI_MODELS = [
+  {
+    id: 'gemini-2.5-flash', name: 'Flash', tag: 'Fast & economical · default',
+    desc: 'Quick, low-cost, free-tier-safe. Best for rapid iteration.',
+    sw: 'linear-gradient(135deg,#19d3da,#2b8cff)'
+  },
+  {
+    id: 'gemini-2.5-pro', name: 'Pro', tag: 'Deeper listener · needs billing',
+    desc: 'Stronger audio + multi-input reasoning and sharper prioritization. Slower and pricier per run; requires billing enabled on the API key.',
+    sw: 'linear-gradient(135deg,#a36cff,#ff5cc8)'
+  }
+]
+function getGeminiModel() {
+  try {
+    const v = localStorage.getItem(MODEL_KEY)
+    if (v && GEMINI_MODELS.some((m) => m.id === v)) return v
+  } catch {
+    // localStorage can throw in restricted contexts — fall through
+  }
+  return 'gemini-2.5-flash'
+}
+function setGeminiModel(id) {
+  if (!GEMINI_MODELS.some((m) => m.id === id)) return
+  try { localStorage.setItem(MODEL_KEY, id) } catch {}
+  // No-op/optional in browser preview (mock window.mc).
+  window.mc?.setModel?.(id).catch(() => {})
+}
+
 function renderSettingsTab(target) {
   const current = getAppTheme()
   const cards = APP_THEMES.map(
@@ -345,11 +379,27 @@ function renderSettingsTab(target) {
         <span class="set-check">✓</span>
       </button>`
   ).join('')
+  const curModel = getGeminiModel()
+  const modelCards = GEMINI_MODELS.map(
+    (m) => `
+      <button class="set-theme ${m.id === curModel ? 'active' : ''}" data-model-id="${m.id}">
+        <span class="set-swatch" style="background:${m.sw}"></span>
+        <span class="set-theme-info">
+          <span class="set-theme-name">${escapeHtml(m.name)}<em> · ${escapeHtml(m.tag)}</em></span>
+          <span class="set-theme-desc">${escapeHtml(m.desc)}</span>
+        </span>
+        <span class="set-check">✓</span>
+      </button>`
+  ).join('')
   target.innerHTML = `
     <div class="settings-stack">
       <div class="widget">
         <h3 class="widget-h">Appearance <span class="widget-sub">theme</span></h3>
         <div class="widget-body"><div class="set-theme-list">${cards}</div></div>
+      </div>
+      <div class="widget">
+        <h3 class="widget-h">AI model <span class="widget-sub">Gemini engine for analysis &amp; chat</span></h3>
+        <div class="widget-body"><div class="set-theme-list">${modelCards}</div></div>
       </div>
     </div>`
   target.querySelectorAll('[data-theme-id]').forEach((b) =>
@@ -358,11 +408,21 @@ function renderSettingsTab(target) {
       renderSettingsTab(target)
     })
   )
+  target.querySelectorAll('[data-model-id]').forEach((b) =>
+    b.addEventListener('click', () => {
+      setGeminiModel(b.dataset.modelId)
+      renderSettingsTab(target)
+    })
+  )
 }
 
 // Apply the saved theme on startup (real app only — the browser preview's
 // own switcher controls the body class there).
 if (!window.__mixcoachPreview) applyAppTheme(getAppTheme())
+
+// Push the persisted Gemini model choice to main on startup so analysis +
+// chat use it from the very first run (mirrors the mode push below).
+window.mc?.setModel?.(getGeminiModel()).catch(() => {})
 
 // ─── Analysis mode (vocal / beat / both) ────────────────────────────
 const MODE_KEY = 'mixcoach.mode'

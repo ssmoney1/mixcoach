@@ -14,7 +14,7 @@ import {
   getLastChatContext,
   setChatMode
 } from './pipeline'
-import { callGeminiChat, ChatMessage } from './gemini'
+import { callGeminiChat, ChatMessage, setGeminiModel } from './gemini'
 import type { Mode } from './suggestions'
 import { setReferenceFromFile, getReference, clearReference } from './reference'
 
@@ -218,6 +218,11 @@ app.whenReady().then(() => {
     setChatMode(asMode(mode))
     return true
   })
+  // Producer-selected Gemini model (Flash / Pro), pushed from the Settings
+  // tab and on startup. Returns the model actually in effect after validation.
+  ipcMain.handle('mc:setModel', (_e, model?: unknown) =>
+    setGeminiModel(typeof model === 'string' ? model : '')
+  )
   ipcMain.handle('mc:cancel', () => cancel())
   ipcMain.handle('mc:hide', () => mainWindow?.hide())
   ipcMain.handle('mc:minimize', () => mainWindow?.minimize())
