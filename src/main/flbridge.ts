@@ -22,8 +22,21 @@ import { Input, Output } from '@julusian/midi'
 
 // Port names as they appear in loopMIDI. Matched case-insensitively, and by
 // substring as a fallback (some setups append a digit, e.g. "MixCoach In 1").
+//
+// IMPORTANT: both directions use the SAME loopMIDI port ("MixCoach In").
+// FL's MIDI scripting always auto-pairs a controller's *output* back to the
+// same port as its *input*, and refuses to persist a different output
+// assignment — it re-pairs to the input's port on every launch and every
+// "Refresh device list", overwriting any manual change. Rather than fight
+// that (which forced the user to re-edit MIDI settings every session), we
+// listen on "MixCoach In" too: Windows allows a second listener alongside FL,
+// and FL's replies loop straight back there. Our own outgoing command echoes
+// also appear on this port but are filtered out in onMessage (only
+// MSG_RESPONSE is processed). Net result: the bridge works with FL's DEFAULT
+// settings — nothing to configure, nothing that can revert. ("MixCoach Out"
+// is no longer required, though leaving it in loopMIDI is harmless.)
 const APP_SEND_PORT = 'MixCoach In' // app -> FL  (MIDI Output on our side)
-const APP_LISTEN_PORT = 'MixCoach Out' // FL -> app (MIDI Input on our side)
+const APP_LISTEN_PORT = 'MixCoach In' // FL -> app (FL auto-replies on this same port)
 
 const SYSEX_START = 0xf0
 const SYSEX_END = 0xf7
