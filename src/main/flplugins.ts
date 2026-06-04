@@ -109,3 +109,127 @@ export function closeFlBridge(): void {
     /* ignore */
   }
 }
+
+// ── Phase 5: APPLY (write) ────────────────────────────────────────────
+// A single proposed change to one existing Pro-Q 3 band. Targets are in real
+// units (Hz / dB / Q); we calibrate the normalized value to hit them, because
+// Pro-Q 3's normalized readback is unreliable (display strings are truth).
+export interface ProQ3Op {
+  insert: number
+  slot: number
+  band: number // existing band number (1-based) to modify
+  freqHz?: number
+  gainDb?: number
+  q?: number
+  label?: string
+}
+
+export interface ApplyResult {
+  ok: boolean
+  op: ProQ3Op
+  applied: string[] // human notes of what was set, e.g. "gain -2.50 dB"
+  error?: string
+}
+
+function pHz(s: string | undefined): number | null {
+  if (!s) return null
+  const m = /(-?\d+(?:\.\d+)?)\s*(k?)\s*hz/i.exec(s)
+  if (!m) return null
+  return parseFloat(m[1]) * (m[2] ? 1000 : 1)
+}
+function pDb(s: string | undefined): number | null {
+  if (!s) return null
+  const m = /([+-]?\d+(?:\.\d+)?)\s*db/i.exec(s)
+  return m ? parseFloat(m[1]) : null
+}
+function pNum(s: string | undefined): number | null {
+  if (!s) return null
+  const m = /(-?\d+(?:\.\d+)?)/.exec(s)
+  return m ? parseFloat(m[1]) : null
+}
+
+// Binary-search the normalized value (0..1) until the read-back display hits
+// `target` within `tol`. Assumes the display rises monotonically with the
+// normalized value (true for Pro-Q 3 frequency / gain / Q).
+async function calibrate(
+  bridge: ReturnType<typeof getFlBridge>,
+  op: ProQ3Op,
+  paramIndex: number,
+  target: number,
+  parse: (s: string | undefined) => number | null,
+  tol: number,
+  log: (s: string) => void
+): Promise<{ ok: boolean; got: number | null; str: string }> {
+  let lo = 0
+  let hi = 1
+  let lastStr = ''
+  let got: number | null = null
+  for (let i = 0; i < 16; i++) {
+    const mid = (lo + hi) / 2
+    const res = await bridge.setParam(op.insert, op.slot, paramIndex, mid, 3000)
+    lastStr = res.str ?? ''
+    got = parse(res.str)
+    if (got == null) return { ok: false, got: null, str: lastStr }
+    if (Math.abs(got - target) <= tol) {
+      log(`  param ${paramIndex}: ${got} (target ${target}) in ${i + 1} steps`)
+      return { ok: true, got, str: lastStr }
+    }
+    if (got < target) lo = mid
+    else hi = mid
+  }
+  return { ok: Math.abs((got ?? Infinity) - target) <= tol * 3, got, str: lastStr }
+}
+
+// Apply one op by reading the plugin, resolving the band's param indices by
+// NAME, then calibrating each requested target. Read-only on everything it
+// doesn't touch. Returns what was actually set.
+export async function applyProQ3Op(op: ProQ3Op): Promise<ApplyResult> {
+  const log = (s: string): void => console.log('[flplugins] apply: ' + s)
+  let bridge: ReturnType<typeof getFlBridge>
+  try {
+    bridge = getFlBridge({ verbose: false })
+    if (!bridge.isOpen()) bridge.open()
+  } catch (err) {
+    return { ok: false, op, applied: [], error: `FL bridge offline: ${(err as Error).message}` }
+  }
+
+  try {
+    const dump = await bridge.readPlugin(op.insert, op.slot, 5000)
+    if (!dump.ok || !dump.params) {
+      return { ok: false, op, applied: [], error: dump.error || 'could not read plugin' }
+    }
+    // Resolve "Band <n> <key>" → param index for the target band.
+    const idx: Record<string, number> = {}
+    const re = new RegExp(`^Band\\s+${op.band}\\s+(.+?)\\s*$`, 'i')
+    for (const p of dump.params) {
+      const m = re.exec(p.name)
+      if (m) idx[m[1].trim().toLowerCase()] = p.i
+    }
+    if (idx['gain'] == null && idx['frequency'] == null && idx['q'] == null) {
+      return { ok: false, op, applied: [], error: `band ${op.band} not found on this plugin` }
+    }
+
+    // Make sure the band is on before changing it (normalized 1.0 = on).
+    if (idx['used'] != null) await bridge.setParam(op.insert, op.slot, idx['used'], 1.0, 3000)
+    if (idx['enabled'] != null) await bridge.setParam(op.insert, op.slot, idx['enabled'], 1.0, 3000)
+
+    const applied: string[] = []
+    if (op.gainDb != null && idx['gain'] != null) {
+      const r = await calibrate(bridge, op, idx['gain'], op.gainDb, pDb, 0.15, log)
+      applied.push(`gain → ${r.str.trim() || op.gainDb + ' dB'}${r.ok ? '' : ' (approx)'}`)
+    }
+    if (op.freqHz != null && idx['frequency'] != null) {
+      const tol = Math.max(1, op.freqHz * 0.01)
+      const r = await calibrate(bridge, op, idx['frequency'], op.freqHz, pHz, tol, log)
+      applied.push(`freq → ${r.str.trim() || op.freqHz + ' Hz'}${r.ok ? '' : ' (approx)'}`)
+    }
+    if (op.q != null && idx['q'] != null) {
+      const r = await calibrate(bridge, op, idx['q'], op.q, pNum, 0.03, log)
+      applied.push(`Q → ${r.str.trim() || String(op.q)}${r.ok ? '' : ' (approx)'}`)
+    }
+    log(`band ${op.band} on insert ${op.insert}: ${applied.join(', ')}`)
+    return { ok: true, op, applied }
+  } catch (err) {
+    return { ok: false, op, applied: [], error: (err as Error).message }
+  }
+}

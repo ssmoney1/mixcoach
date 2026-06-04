@@ -110,7 +110,7 @@ function createWindow(): void {
     skipTaskbar: false,
     backgroundColor: '#0e0e0e',
     webPreferences: {
-      preload: join(__dirname, '../preload/index.mjs'),
+      preload: join(__dirname, '../preload/index.cjs'),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false
@@ -264,6 +264,26 @@ app.whenReady().then(() => {
       return { ok: true, reference: ref }
     } catch (err) {
       return { ok: false, error: (err as Error).message }
+    }
+  })
+  // Live plugin EQ scan (for the Plugins tab) — dynamic import so the native
+  // MIDI module is only touched on demand and failures stay contained.
+  ipcMain.handle('mc:scanPlugins', async () => {
+    try {
+      const mod = await import('./flplugins')
+      return await mod.scanPluginEq({ perCommandTimeoutMs: 4000 })
+    } catch (err) {
+      return { available: false, states: [], error: (err as Error).message }
+    }
+  })
+  // Phase 5 WRITE — apply one Pro-Q 3 change. Only invoked when the user
+  // clicks Apply in the UI; never automatic.
+  ipcMain.handle('mc:applyProQ3', async (_e, op: unknown) => {
+    try {
+      const mod = await import('./flplugins')
+      return await mod.applyProQ3Op(op as Parameters<typeof mod.applyProQ3Op>[0])
+    } catch (err) {
+      return { ok: false, op, applied: [], error: (err as Error).message }
     }
   })
   ipcMain.handle('mc:getReference', () => getReference())

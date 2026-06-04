@@ -40,6 +40,14 @@ export type FlCommand =
   | { action: 'ping'; id?: number }
   | { action: 'list_plugins'; id?: number }
   | { action: 'read_plugin'; mixer_track: number; slot: number; id?: number }
+  | {
+      action: 'set_param'
+      mixer_track: number
+      slot: number
+      param: number
+      value: number
+      id?: number
+    }
 
 export interface PluginLocation {
   mixer_track: number
@@ -77,6 +85,20 @@ export interface ReadPluginResult {
   plugin?: string
   param_count?: number
   params?: PluginParam[]
+  error?: string
+  id?: number
+}
+
+export interface SetParamResult {
+  ok: boolean
+  action: 'set_param'
+  mixer_track: number
+  slot: number
+  param: number
+  name?: string
+  requested?: number // the normalized value we asked for
+  val?: number // normalized value read back
+  str?: string // display string read back (e.g. "-2.5 dB")
   error?: string
   id?: number
 }
@@ -243,6 +265,22 @@ export class FlBridge {
   readPlugin(insert: number, slot: number, timeoutMs?: number): Promise<ReadPluginResult> {
     return this.sendCommand<ReadPluginResult>(
       { action: 'read_plugin', mixer_track: insert, slot, id: this.nextId() },
+      timeoutMs
+    )
+  }
+
+  // WRITE (Phase 5). Sets one normalized (0..1) parameter and returns the
+  // value/display read back. Only ever called in response to an explicit
+  // user action (clicking Apply) — never automatically.
+  setParam(
+    insert: number,
+    slot: number,
+    param: number,
+    value: number,
+    timeoutMs?: number
+  ): Promise<SetParamResult> {
+    return this.sendCommand<SetParamResult>(
+      { action: 'set_param', mixer_track: insert, slot, param, value, id: this.nextId() },
       timeoutMs
     )
   }

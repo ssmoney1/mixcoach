@@ -64,7 +64,11 @@ function installPreviewMock() {
     '- `SSLGChannel` — `2:1`, `~2 dB GR` to tighten LRA toward `5 LU`',
     '- `Pro-L 2` — ceiling `-1.0 dBTP`, input `+2 dB` to reach `~-9 LUFS`',
     '',
-    '**Working well:** Your vocal tuning and 808 tone are genuinely solid — this is a dynamics-and-brightness fix, not a re-mix.'
+    '**Working well:** Your vocal tuning and 808 tone are genuinely solid — this is a dynamics-and-brightness fix, not a re-mix.',
+    '',
+    '```mixcoach-eq',
+    '[{"insert":2,"slot":1,"band":2,"gainDb":-2.5,"label":"Insert 2 Pro-Q 3 — deepen the 156 Hz bell to -2.5 dB to clear the boxiness"},{"insert":2,"slot":1,"band":5,"gainDb":1.0,"q":1.4,"label":"Insert 2 Pro-Q 3 — ease the 9.6 kHz boost to +1.0 dB, tighten Q to 1.4"}]',
+    '```'
   ].join('\n')
 
   const SAMPLE_AUDIO = {
@@ -185,6 +189,32 @@ function installPreviewMock() {
       ref = null
       return true
     },
+    scanPlugins: async () => ({
+      available: true,
+      states: [
+        {
+          insert: 2,
+          slot: 1,
+          pluginName: 'FabFilter Pro-Q 3',
+          proq3: {
+            plugin: 'FabFilter Pro-Q 3',
+            bands: [
+              { n: 2, type: 'bell', freq: '156.09 Hz', gain: '-0.47 dB', q: 1.496 },
+              { n: 3, type: 'bell', freq: '362.41 Hz', gain: '+0.81 dB', q: 1.324 },
+              { n: 5, type: 'bell', freq: '9625.7 Hz', gain: '+2.29 dB', q: 1.108 }
+            ],
+            hp: { freq: '89.5 Hz', slope: '24 dB/oct' },
+            lp: null,
+            output: '0.00 dB'
+          }
+        }
+      ]
+    }),
+    applyProQ3: async (op) => ({
+      ok: true,
+      applied: [`${op.gainDb != null ? `gain → ${op.gainDb} dB` : ''}`].filter(Boolean),
+      op
+    }),
     onStart: on('mc:start'),
     onStatus: on('mc:status'),
     onResult: on('mc:result'),
@@ -1166,6 +1196,11 @@ function renderCurrentView() {
       renderSettingsTab(target)
       return
     }
+    // Plugins tab reads live from FL — usable before any analysis.
+    if (currentTab === 'plugins') {
+      renderPluginsTab(target, null)
+      return
+    }
     target.innerHTML = renderEmpty()
     target.querySelectorAll('.mode-opt').forEach((btn) => {
       btn.addEventListener('click', () => setMode(btn.dataset.mode))
@@ -1183,6 +1218,7 @@ function renderCurrentView() {
       break
     case 'ai':
       renderAITab(target, lastResult)
+      injectApplyPanel(target)
       break
     case 'extras':
       renderExtrasTab(target, lastResult)
@@ -1199,6 +1235,9 @@ function renderCurrentView() {
     case 'compare':
       renderCompareTab(target, lastResult)
       break
+    case 'plugins':
+      renderPluginsTab(target, lastResult)
+      break
     case 'settings':
       renderSettingsTab(target)
       break
@@ -1207,11 +1246,156 @@ function renderCurrentView() {
   }
 }
 
+// ─── Plugins tab (live FabFilter EQ) + Phase 5 apply ────────────────────
+// Gemini emits applyable moves in a ```mixcoach-eq fenced JSON block.
+function parseEqOps(text) {
+  if (!text) return []
+  const m = text.match(/```mixcoach-eq\s*([\s\S]*?)```/i)
+  if (!m) return []
+  try {
+    const arr = JSON.parse(m[1].trim())
+    if (!Array.isArray(arr)) return []
+    return arr.filter(
+      (o) =>
+        o &&
+        typeof o.insert === 'number' &&
+        typeof o.slot === 'number' &&
+        typeof o.band === 'number'
+    )
+  } catch {
+    return []
+  }
+}
+
+function describeOp(o) {
+  const bits = [`Insert ${o.insert} · Band ${o.band}`]
+  if (o.gainDb != null) bits.push(`${o.gainDb > 0 ? '+' : ''}${o.gainDb} dB`)
+  if (o.freqHz != null) bits.push(`@ ${o.freqHz} Hz`)
+  if (o.q != null) bits.push(`Q ${o.q}`)
+  return bits.join(' ')
+}
+
+function renderApplyPanel(ops) {
+  if (!ops.length) return ''
+  return `
+    <div class="apply-panel">
+      <div class="apply-title">⚡ Suggested EQ moves — click Apply to set it in FL</div>
+      ${ops
+        .map(
+          (o, i) => `
+        <div class="apply-row">
+          <div class="apply-label">${escapeHtml(o.label || describeOp(o))}</div>
+          <button class="btn-apply" data-op="${i}" type="button" title="Writes this move into Pro-Q 3 on insert ${o.insert}">Apply</button>
+        </div>`
+        )
+        .join('')}
+      <div class="apply-note">Nothing is written until you click. Modifies existing bands only.</div>
+    </div>`
+}
+
+let __eqOps = []
+function wireApplyButtons(scope) {
+  __eqOps = parseEqOps(lastResult?.text)
+  scope.querySelectorAll('.btn-apply').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const op = __eqOps[Number(btn.dataset.op)]
+      if (!op || !window.mc?.applyProQ3) return
+      btn.disabled = true
+      btn.textContent = 'Applying…'
+      try {
+        const res = await window.mc.applyProQ3(op)
+        if (res && res.ok) {
+          btn.textContent = '✓ Applied'
+          btn.classList.add('applied')
+          if ($('plugins-body')) setTimeout(loadLivePlugins, 400)
+        } else {
+          btn.textContent = 'Failed'
+          btn.title = res?.error || 'unknown error'
+          btn.disabled = false
+        }
+      } catch (e) {
+        btn.textContent = 'Failed'
+        btn.title = String(e?.message || e)
+        btn.disabled = false
+      }
+    })
+  })
+}
+
+// Prepend the apply panel to the AI Analysis tab so moves sit by the analysis.
+function injectApplyPanel(target) {
+  const ops = parseEqOps(lastResult?.text)
+  if (!ops.length) return
+  const holder = document.createElement('div')
+  holder.innerHTML = renderApplyPanel(ops)
+  if (holder.firstElementChild) target.insertBefore(holder.firstElementChild, target.firstChild)
+  wireApplyButtons(target)
+}
+
+function renderPluginsTab(target, r) {
+  const ops = parseEqOps(r?.text)
+  target.innerHTML = `
+    <div class="plugins-tab">
+      <div class="plugins-head">
+        <h2>Live Plugins</h2>
+        <button id="btn-refresh-plugins" class="btn-secondary" type="button">↻ Refresh from FL</button>
+      </div>
+      <div class="plugins-hint">FabFilter Pro-Q 3 instances on your mixer, read live from FL Studio over MIDI.</div>
+      ${renderApplyPanel(ops)}
+      <div id="plugins-body" class="plugins-body"><div class="plugins-loading">Reading plugins from FL…</div></div>
+    </div>`
+  target.querySelector('#btn-refresh-plugins')?.addEventListener('click', loadLivePlugins)
+  wireApplyButtons(target)
+  loadLivePlugins()
+}
+
+async function loadLivePlugins() {
+  const body = $('plugins-body')
+  if (!body || !window.mc?.scanPlugins) return
+  body.innerHTML = '<div class="plugins-loading">Reading plugins from FL…</div>'
+  let res
+  try {
+    res = await window.mc.scanPlugins()
+  } catch (e) {
+    body.innerHTML = `<div class="plugins-empty">Could not read plugins: ${escapeHtml(String(e?.message || e))}</div>`
+    return
+  }
+  if (!res || !res.available) {
+    body.innerHTML = `<div class="plugins-empty">FL bridge offline — open FL Studio + loopMIDI with the MixCoach controller assigned.${res?.error ? ` <span class="dim">(${escapeHtml(res.error)})</span>` : ''}</div>`
+    return
+  }
+  const states = res.states || []
+  if (!states.length) {
+    body.innerHTML = '<div class="plugins-empty">No FabFilter Pro-Q 3 found on the mixer.</div>'
+    return
+  }
+  body.innerHTML = states.map(renderProqCard).join('')
+}
+
+function renderProqCard(s) {
+  const st = s.proq3
+  if (!st) return ''
+  const rows = (st.bands || [])
+    .map(
+      (b) =>
+        `<tr><td>${b.n}</td><td>${escapeHtml(b.type)}</td><td>${escapeHtml(b.freq || '–')}</td><td>${escapeHtml(b.gain || '–')}</td><td>${b.q != null ? b.q : '–'}</td></tr>`
+    )
+    .join('')
+  const cut = (label, c) =>
+    c ? `<span class="proq-cut">${label} ${escapeHtml(c.freq || '?')}${c.slope ? ` · ${escapeHtml(c.slope)}` : ''}</span>` : ''
+  return `
+    <div class="proq-card">
+      <div class="proq-head"><span class="proq-name">${escapeHtml(s.pluginName)}</span><span class="proq-loc">Insert ${s.insert} · slot ${s.slot}</span></div>
+      <div class="proq-cuts">${cut('HP', st.hp)}${cut('LP', st.lp)}${st.output ? `<span class="proq-cut">Output ${escapeHtml(st.output)}</span>` : ''}</div>
+      ${rows ? `<table class="proq-table"><thead><tr><th>Band</th><th>Type</th><th>Freq</th><th>Gain</th><th>Q</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="proq-empty">No active shaping bands.</div>'}
+    </div>`
+}
+
 function renderEmpty() {
   return `
     <div class="empty-state">
       <h2>Start an analysis</h2>
-      <p>MixCoach captures your screen, your .flp project, and 15 seconds of audio, then asks a veteran engineer what to fix.</p>
+      <p>MixCoach captures your .flp project, your live plugin settings, and 15 seconds of audio, then asks a veteran engineer what to fix.</p>
       <div class="empty-mode-bar" role="radiogroup" aria-label="Analysis mode">
         <button class="mode-opt" data-mode="vocal" role="radio" aria-checked="false">Vocal</button>
         <button class="mode-opt" data-mode="beat" role="radio" aria-checked="false">Beat</button>

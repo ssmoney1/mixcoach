@@ -27,10 +27,13 @@
 #   0x7D       = SysEx "non-commercial / educational" manufacturer id
 #   0x4D 0x43  = "MC" tag so we never react to unrelated SysEx traffic
 #
-# Commands supported this phase (READ-ONLY — nothing is ever written):
+# Commands supported:
 #   {"action":"ping"}
 #   {"action":"list_plugins"}
 #   {"action":"read_plugin","mixer_track":<int>,"slot":<int>}
+#   {"action":"set_param","mixer_track":<int>,"slot":<int>,"param":<int>,
+#    "value":<float 0..1>}   <- Phase 5 WRITE. Only ever sent when the user
+#                               clicks Apply; nothing is written autonomously.
 #   (an optional "id" field on any command is echoed back on the response)
 #
 # Everything is wrapped in try/except and logged with print() so it shows in
@@ -154,6 +157,8 @@ def _dispatch(text):
             _do_list_plugins(cmd)
         elif action == "read_plugin":
             _do_read_plugin(cmd)
+        elif action == "set_param":
+            _do_set_param(cmd)
         else:
             _send_error("unknown_action", str(action))
     except Exception as e:
@@ -258,6 +263,66 @@ def _do_read_plugin(cmd):
         "param_count": count,
         "params": params,
     })
+
+
+# ── Write (Phase 5) ───────────────────────────────────────────────────
+# Sets a single normalized parameter value and reads it straight back, so the
+# caller can confirm the result and calibrate display values. This is the ONLY
+# write path; it acts only when explicitly commanded (user clicks Apply).
+def _do_set_param(cmd):
+    try:
+        track = int(cmd.get("mixer_track", -1))
+        slot = int(cmd.get("slot", -1))
+        param = int(cmd.get("param", -1))
+        value = float(cmd.get("value"))
+    except Exception:
+        _send_error("bad_args", "mixer_track, slot, param, value required")
+        return
+    if track < 0 or slot < 0 or param < 0:
+        _send_error("bad_args", "mixer_track, slot, param must be >= 0")
+        return
+    # Clamp to the normalized range.
+    if value < 0.0:
+        value = 0.0
+    if value > 1.0:
+        value = 1.0
+
+    try:
+        if not plugins.isValid(track, slot):
+            _send_json({"ok": False, "action": "set_param",
+                        "mixer_track": track, "slot": slot, "error": "no_plugin"})
+            return
+    except Exception as e:
+        _send_error("isvalid_failed", repr(e))
+        return
+
+    try:
+        # setParamValue(value, paramIndex, index, slotIndex)
+        plugins.setParamValue(value, param, track, slot)
+    except Exception as e:
+        _send_error("setparam_failed", repr(e))
+        return
+
+    # Read back so the app can confirm + calibrate (display strings are
+    # authoritative for Pro-Q 3; the normalized read can be unreliable).
+    try:
+        newval = float(plugins.getParamValue(param, track, slot))
+    except Exception:
+        newval = value
+    try:
+        newstr = plugins.getParamValueString(param, track, slot)
+    except Exception:
+        newstr = ""
+    try:
+        pname = plugins.getParamName(param, track, slot)
+    except Exception:
+        pname = ""
+    _log("set_param track=" + str(track) + " slot=" + str(slot) +
+         " param=" + str(param) + " value=" + str(value) +
+         " -> '" + str(newstr) + "'")
+    _send_json({"ok": True, "action": "set_param", "mixer_track": track,
+                "slot": slot, "param": param, "name": pname,
+                "requested": value, "val": round(newval, 6), "str": newstr})
 
 
 # ── SysEx encode / send (chunked) ─────────────────────────────────────

@@ -32,6 +32,19 @@ const api = {
   }> => ipcRenderer.invoke('mc:pickReference', startSec),
   getReference: (): Promise<unknown> => ipcRenderer.invoke('mc:getReference'),
   clearReference: (): Promise<boolean> => ipcRenderer.invoke('mc:clearReference'),
+  // Live plugin EQ scan + Phase 5 apply (write).
+  scanPlugins: (): Promise<{ available: boolean; states: unknown[]; error?: string }> =>
+    ipcRenderer.invoke('mc:scanPlugins'),
+  applyProQ3: (op: {
+    insert: number
+    slot: number
+    band: number
+    freqHz?: number
+    gainDb?: number
+    q?: number
+    label?: string
+  }): Promise<{ ok: boolean; applied: string[]; error?: string }> =>
+    ipcRenderer.invoke('mc:applyProQ3', op),
   onStart: (cb: Listener<{ startedAt: string }>) => on('mc:start', cb),
   onStatus: (cb: Listener<unknown>) => on('mc:status', cb),
   onResult: (cb: Listener<unknown>) => on('mc:result', cb),

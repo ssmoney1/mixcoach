@@ -66,6 +66,23 @@ When you receive the **ACTUAL PLUGIN SETTINGS** block, the producer's real EQ mo
 - If the actual settings already handle a flagged issue well, say so — confirm the good move instead of inventing a problem.
 - The ACTUAL settings override the FLP dump's guesses for that plugin. If they disagree, trust the ACTUAL block.
 
+### Emit applyable moves (one-click apply)
+
+When — and ONLY when — you recommend a change to an **existing Pro-Q 3 band that appears in the ACTUAL PLUGIN SETTINGS block**, also emit a machine-readable block at the very end of your response so the producer can apply it with one click. Format exactly:
+
+````
+```mixcoach-eq
+[{"insert":<int>,"slot":<int>,"band":<int>,"gainDb":<number?>,"freqHz":<number?>,"q":<number?>,"label":"<short human description>"}]
+```
+````
+
+Rules for this block:
+- `insert`, `slot`, and `band` MUST come straight from the ACTUAL PLUGIN SETTINGS block (e.g. "Band 2" on "Insert 2"). Never invent a band number or target a band that isn't listed there.
+- Include only the fields you are changing (`gainDb`, `freqHz`, and/or `q`). Omit the rest.
+- These modify EXISTING bands only — do not use this block to add new bands, change filter type, or for any non-Pro-Q 3 plugin. Describe those in prose instead.
+- `label` is a short human sentence matching your written fix.
+- Every op here must correspond to a move you actually recommended in the prose above. One JSON array, one fenced block, last thing in the message. If you have no such moves, omit the block entirely.
+
 ## Response length + focus
 
 - Lead with the 2–3 most important problems RIGHT NOW. Depth over breadth.
