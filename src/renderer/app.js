@@ -121,7 +121,7 @@ function installPreviewMock() {
       { title: 'Stereo Field', message: 'Your mix is too narrow, consider widening the stereo image.', severity: 'warning' }
     ],
     flpOk: true, flpName: 'midnight_drive.flp', flpPath: 'C:\\Music\\midnight_drive.flp',
-    screenshotOk: true, wavPath: null,
+    wavPath: null,
     vocalChain: SAMPLE_CHAIN, vocalChainBuses: [13, 16, 5, 8], mode: 'both',
     vocalVerdict: {
       headline: 'Dull', clarity_score: 82,
@@ -155,6 +155,9 @@ function installPreviewMock() {
     trigger: async () => {
       emit('mc:start', { startedAt: new Date().toISOString() })
       const phases = [
+        { phase: 'countdown', seconds_remaining: 3 },
+        { phase: 'countdown', seconds_remaining: 2 },
+        { phase: 'countdown', seconds_remaining: 1 },
         { phase: 'recording', seconds_remaining: 3 },
         { phase: 'analyzing' },
         { phase: 'flp' },
@@ -406,9 +409,9 @@ function setTab(name) {
 function statusLine(s) {
   if (!s || typeof s !== 'object') return { text: 'Working…', detail: '' }
   switch (s.phase) {
-    case 'screenshot':
+    case 'countdown':
       return {
-        text: 'Capturing FL Studio screenshot…',
+        text: 'Get ready…',
         detail: typeof s.seconds_remaining === 'number' ? `${s.seconds_remaining}…` : ''
       }
     case 'recording':
@@ -1123,7 +1126,7 @@ function wireChat(container) {
 // ─── Trigger / error helpers ────────────────────────────────────────
 async function trigger() {
   pipelineState = 'loading'
-  lastStatus = { phase: 'screenshot', seconds_remaining: 5 }
+  lastStatus = { phase: 'countdown', seconds_remaining: 3 }
   lastError = null
   renderCurrentView()
   try {
@@ -1220,6 +1223,19 @@ function renderEmpty() {
 }
 
 function renderLoading() {
+  // Before recording starts, show a big 3-2-1 countdown instead of the spinner.
+  if (lastStatus && lastStatus.phase === 'countdown') {
+    const n =
+      typeof lastStatus.seconds_remaining === 'number' ? lastStatus.seconds_remaining : ''
+    return `
+      <div class="loading-state countdown-state">
+        <div class="countdown-num">${escapeHtml(String(n))}</div>
+        <div class="countdown-label">Get ready — recording starts in…</div>
+        <div class="loading-actions">
+          <button id="btn-cancel-inline" type="button">Cancel</button>
+        </div>
+      </div>`
+  }
   const { text, detail } = statusLine(lastStatus)
   return `
     <div class="loading-state">
@@ -2197,7 +2213,7 @@ try {
 window.mc.onStart(() => {
   cancelInFlight = false
   pipelineState = 'loading'
-  lastStatus = { phase: 'screenshot', seconds_remaining: 5 }
+  lastStatus = { phase: 'countdown', seconds_remaining: 3 }
   renderCurrentView()
 })
 
@@ -2210,11 +2226,29 @@ window.mc.onStatus((s) => {
   if (cancelInFlight) return
   pipelineState = 'loading'
   lastStatus = s
-  // Avoid re-rendering the whole loading view every tick — just update text.
+  // Avoid re-rendering the whole loading view every tick — just patch in place
+  // when the current DOM already matches the phase's view shape.
   const target = $('tab-content')
-  if (target && target.querySelector('.loading-state')) {
+  const numEl = target && target.querySelector('.countdown-num')
+  if (s && s.phase === 'countdown') {
+    // Still counting down → just swap the big number, else build the view.
+    if (numEl) {
+      numEl.textContent =
+        typeof s.seconds_remaining === 'number' ? String(s.seconds_remaining) : ''
+      // Restart the pop animation so each new number animates in.
+      numEl.style.animation = 'none'
+      void numEl.offsetWidth
+      numEl.style.animation = ''
+    } else {
+      renderCurrentView()
+    }
+    return
+  }
+  const textEl = target && target.querySelector('.status-text')
+  if (textEl) {
+    // Leaving the countdown (or already in the spinner view) → normal status.
     const { text, detail } = statusLine(s)
-    target.querySelector('.status-text').textContent = text
+    textEl.textContent = text
     target.querySelector('.status-detail').textContent = detail
   } else {
     renderCurrentView()

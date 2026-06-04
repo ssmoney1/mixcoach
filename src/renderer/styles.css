@@ -392,6 +392,8 @@ button.icon  { padding: 2px 9px; font-size: 16px; line-height: 1; }
 .empty-state .empty-mode-bar {
   display: flex;
   gap: 4px;
+  width: 100%;
+  justify-content: center;
   background: transparent;
   border-bottom: none;
   padding: 0;
@@ -424,6 +426,29 @@ button.icon  { padding: 2px 9px; font-size: 16px; line-height: 1; }
   letter-spacing: 0.6px;
 }
 .loading-state .loading-actions { margin-top: 16px; }
+
+/* ─── Big 3-2-1 countdown before recording ───────────────────────── */
+.countdown-state .countdown-num {
+  font-family: var(--mono);
+  font-size: 160px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
+  letter-spacing: 2px;
+  text-shadow: 0 0 32px var(--accent-soft);
+  animation: countdown-pop 1s ease-out;
+}
+.countdown-state .countdown-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0.6px;
+}
+@keyframes countdown-pop {
+  0% { transform: scale(1.35); opacity: 0.2; }
+  30% { transform: scale(1); opacity: 1; }
+}
+
 .spinner {
   width: 36px;
   height: 36px;

@@ -285,7 +285,8 @@ app.whenReady().then(() => {
       reference: getReference(),
       comparison: null,
       mixWavPath: null,
-      referenceClipPath: getReference()?.clipPath ?? null
+      referenceClipPath: getReference()?.clipPath ?? null,
+      pluginEqText: null
     }
     return await callGeminiChat({ messages, context })
   })
@@ -310,6 +311,13 @@ app.whenReady().then(() => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
   stopMeter()
+  // Release the FL MIDI bridge ports if it was ever opened. Dynamic import so
+  // the native module is only touched if flplugins was actually loaded.
+  import('./flplugins')
+    .then((m) => m.closeFlBridge())
+    .catch(() => {
+      /* bridge never loaded — nothing to close */
+    })
 })
 
 app.on('window-all-closed', () => {

@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process'
 import { join, basename } from 'node:path'
 import { app } from 'electron'
 import { is } from '@electron-toolkit/utils'
-import { captureScreenshot, Screenshot } from './screenshot'
 import {
   callGemini,
   FlpData,
@@ -18,6 +17,10 @@ import {
   ReferenceAudio,
   Comparison
 } from './reference'
+// Type-only import — erased at runtime, so the native @julusian/midi binary is
+// NOT loaded by importing this type. The actual scan module is loaded lazily
+// via dynamic import in scanFlPluginsSafe().
+import type { PluginEqState } from './flplugins'
 
 type ChainStep = ReturnType<typeof extractVocalChain>[number]
 
@@ -50,13 +53,14 @@ export function setChatMode(mode: Mode): void {
       reference: null,
       comparison: null,
       mixWavPath: null,
-      referenceClipPath: null
+      referenceClipPath: null,
+      pluginEqText: null
     }
   }
 }
 
 export type Status =
-  | { phase: 'screenshot'; seconds_remaining: number }
+  | { phase: 'countdown'; seconds_remaining: number }
   | { phase: 'recording'; seconds_remaining: number }
   | { phase: 'analyzing' }
   // ROEX_DISABLED — was `'roex'` while waiting on the cloud API.
@@ -75,7 +79,6 @@ export type PipelineResult = {
   flpOk: boolean
   flpName: string | null
   flpPath: string | null
-  screenshotOk: boolean
   wavPath: string | null
   vocalChain: ChainStep[]
   vocalChainBuses: number[]
@@ -83,6 +86,10 @@ export type PipelineResult = {
   vocalVerdict: VocalVerdict | null
   reference: ReferenceAudio | null
   comparison: Comparison | null
+  // Live plugin EQ read from FL over MIDI (Phase 4). Empty when the FL bridge
+  // is offline or no supported plugin was found.
+  flPluginEq: PluginEqState[]
+  flBridgeAvailable: boolean
 }
 
 export function pythonExecutable(): string {
@@ -192,17 +199,48 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
   })
 }
 
+// Read live plugin EQ from FL over MIDI, fully isolated and bounded. The
+// flplugins module (and its native @julusian/midi dependency) is loaded only
+// here, via dynamic import, so a missing/broken binary or an offline bridge
+// can never crash or stall the pipeline — it just returns no EQ data.
+async function scanFlPluginsSafe(): Promise<{
+  text: string | null
+  states: PluginEqState[]
+  available: boolean
+}> {
+  const empty = { text: null, states: [] as PluginEqState[], available: false }
+  try {
+    const mod = await import('./flplugins')
+    const result = await Promise.race([
+      mod.scanPluginEq({ perCommandTimeoutMs: 4000 }),
+      new Promise<{ available: boolean; states: PluginEqState[] }>((resolve) =>
+        // Hard ceiling so plugin reading never delays Gemini past the audio
+        // window, even if FL responds to some commands but stalls on others.
+        setTimeout(() => resolve({ available: false, states: [] }), 12000)
+      )
+    ])
+    return {
+      text: mod.buildPluginEqPromptText(result.states),
+      states: result.states,
+      available: result.available
+    }
+  } catch (err) {
+    console.error('[flplugins] scan unavailable:', (err as Error).message)
+    return empty
+  }
+}
+
 export async function runPipeline(
   onStatus: (s: Status) => void,
   signal?: AbortSignal,
   mode: Mode = 'both'
 ): Promise<PipelineResult> {
-  // 5-second screenshot prep countdown — gives the producer time to bring
-  // FL Studio to the front and queue up the moment they want captured before
-  // audio recording / screenshotting fire.
-  for (let s = 5; s >= 1; s--) {
+  // 3-second countdown — gives the producer a moment to start playback in
+  // FL Studio and queue up the section they want analyzed before the 15s
+  // audio recording fires.
+  for (let s = 3; s >= 1; s--) {
     if (signal?.aborted) throw new CancelledError()
-    onStatus({ phase: 'screenshot', seconds_remaining: s })
+    onStatus({ phase: 'countdown', seconds_remaining: s })
     await abortableDelay(1000, signal)
   }
 
@@ -230,15 +268,9 @@ export async function runPipeline(
     }
   }, 1000)
 
-  const screenshotPromise: Promise<Screenshot> = captureScreenshot().catch(
-    (err) =>
-      ({
-        ok: false,
-        base64: null,
-        mimeType: 'image/png',
-        error: (err as Error).message
-      }) as Screenshot
-  )
+  // Read live FL plugin EQ in parallel with the 15s capture (it's MIDI I/O in
+  // the main process, independent of the audio/FLP subprocesses). Never throws.
+  const flPluginsPromise = scanFlPluginsSafe()
 
   const flpPromise = runWithStatus<FlpData>(
     'parse_flp.py',
@@ -257,15 +289,10 @@ export async function runPipeline(
     }
   })
 
-  let screenshot: Screenshot
   let flp: FlpData
   let audio: AudioData
   try {
-    ;[screenshot, flp, audio] = await Promise.all([
-      screenshotPromise,
-      flpPromise,
-      audioPromise
-    ])
+    ;[flp, audio] = await Promise.all([flpPromise, audioPromise])
   } finally {
     clearInterval(countdown)
   }
@@ -280,9 +307,11 @@ export async function runPipeline(
   // AUDIO 1 (only when the capture/analysis succeeded and the file exists).
   const mixWavPath = audio.ok ? lastWavPath() : null
 
+  // Already running since the capture started — collect its result now.
+  const flPlugins = await flPluginsPromise
+
   onStatus({ phase: 'gemini' })
   const text = await callGemini({
-    screenshot,
     flp,
     audio,
     suggestions,
@@ -291,6 +320,7 @@ export async function runPipeline(
     reference,
     comparison,
     mixWavPath,
+    pluginEqText: flPlugins.text,
     signal
   })
 
@@ -306,7 +336,8 @@ export async function runPipeline(
     reference,
     comparison,
     mixWavPath,
-    referenceClipPath: reference?.ok ? reference.clipPath : null
+    referenceClipPath: reference?.ok ? reference.clipPath : null,
+    pluginEqText: flPlugins.text
   }
 
   return {
@@ -320,13 +351,14 @@ export async function runPipeline(
     flpPath: flp.ok && typeof flp.flp_path === 'string' ? flp.flp_path : null,
     flpName:
       flp.ok && typeof flp.flp_path === 'string' ? basename(flp.flp_path) : null,
-    screenshotOk: !!screenshot.ok,
     wavPath: audio.ok && typeof audio.wav_path === 'string' ? audio.wav_path : null,
     vocalChain: extractVocalChain(flp),
     vocalChainBuses: [...VOCAL_CHAIN_BUSES],
     mode,
     vocalVerdict,
     reference,
-    comparison
+    comparison,
+    flPluginEq: flPlugins.states,
+    flBridgeAvailable: flPlugins.available
   }
 }

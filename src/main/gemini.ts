@@ -120,7 +120,7 @@ const MODEL = 'gemini-2.5-flash'
 // checklist never truncates. Thinking tokens are budgeted separately below.
 const MAX_OUTPUT_TOKENS = 16384
 // A real thinking budget — Pro reasons over the two audio clips, the delta
-// table, the FLP chain, and the screenshot before answering. (-1 = let the
+// table, and the FLP chain before answering. (-1 = let the
 // model decide dynamically; a fixed number caps it.)
 const THINKING_BUDGET = 8192
 
@@ -184,13 +184,6 @@ export type AudioData = {
   wav_path?: string | null
 }
 
-export type ScreenshotData = {
-  ok: boolean
-  base64: string | null
-  mimeType: 'image/png'
-  error: string | null
-}
-
 function promptsRoot(): string {
   return is.dev
     ? join(app.getAppPath(), 'prompts')
@@ -203,7 +196,7 @@ function modeFocusText(mode: Mode): string {
       'SCOPE: This capture is focused on the VOCAL TRACK (soloed or vocal-dominant audio).',
       'Center every problem and every fix on the vocal: clarity, presence, sibilance, mud at 250-500 Hz, harshness at 2-5 kHz, breath handling, depth, dynamics, de-essing, and how the vocal chain in the FLP data shapes the signal.',
       'The vocal chain section is the canonical context. Do NOT give mix-bus or beat-balance advice in this mode — there is no instrumental in the capture (or it is intentionally absent).',
-      'When discussing clarity, use the VOCAL VERDICT block as the ground truth for muddiness / harshness / sibilance / dullness rather than guessing from the screenshot.'
+      'When discussing clarity, use the VOCAL VERDICT block as the ground truth for muddiness / harshness / sibilance / dullness rather than guessing.'
     ].join('\n')
   }
   if (mode === 'beat') {
@@ -622,7 +615,7 @@ async function readAudioInlinePart(
 }
 
 // Log a one-line manifest of the request parts so we can confirm — in the
-// terminal — that the audio clips and screenshot are actually attached.
+// terminal — that the audio clips are actually attached.
 function logParts(label: string, parts: GeminiPart[]): void {
   const manifest = parts.map((p) => {
     if ('inline_data' in p) {
@@ -704,7 +697,6 @@ async function geminiRequest(
 }
 
 export async function callGemini(args: {
-  screenshot: ScreenshotData | null
   flp: FlpData | null
   audio: AudioData | null
   suggestions: Suggestion[]
@@ -715,6 +707,9 @@ export async function callGemini(args: {
   // Path to the recorded 15s mix WAV (capture_and_analyze persists it). Sent
   // to Gemini as "AUDIO 1" so it can hear the mix, not just read the numbers.
   mixWavPath: string | null
+  // Live plugin settings read from FL over MIDI (Pro-Q 3 EQ moves, etc.).
+  // Null when no supported plugin is found or the FL bridge is offline.
+  pluginEqText?: string | null
   signal?: AbortSignal
 }): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY?.trim()
@@ -747,7 +742,7 @@ export async function callGemini(args: {
     })
     parts.push(mixPart)
   } else {
-    parts.push({ text: 'AUDIO 1 — MY MIX: unavailable (could not attach the captured WAV). Work from the DSP numbers + screenshot.' })
+    parts.push({ text: 'AUDIO 1 — MY MIX: unavailable (could not attach the captured WAV). Work from the DSP numbers.' })
   }
   if (refPart) {
     const ref = args.reference as ReferenceAudio
@@ -758,15 +753,9 @@ export async function callGemini(args: {
     parts.push(refPart)
   }
 
-  // 3. Screenshot.
-  if (args.screenshot?.ok && args.screenshot.base64) {
-    parts.push({ text: 'SCREENSHOT of the FL Studio window:' })
-    parts.push({
-      inline_data: { mime_type: args.screenshot.mimeType, data: args.screenshot.base64 }
-    })
-  } else {
-    parts.push({ text: 'SCREENSHOT: unavailable.' })
-  }
+  // 3. Live plugin settings — the EXACT EQ moves already dialed in (when the
+  // FL bridge is online and a supported plugin is present).
+  if (args.pluginEqText) parts.push({ text: args.pluginEqText })
 
   // 4. Verdict + full chain context + DSP numbers + flagged issues.
   if (verdictText) parts.push({ text: verdictText })
@@ -800,6 +789,9 @@ export type ChatContext = {
   // the hi-hats"). Mix = the recorded capture; reference = the 15s segment.
   mixWavPath: string | null
   referenceClipPath: string | null
+  // Live plugin EQ settings block (same one fed to the analysis), so follow-up
+  // chat can reference the producer's actual moves. Null when unavailable.
+  pluginEqText: string | null
 }
 
 function formatChatContext(ctx: ChatContext): string {
@@ -813,6 +805,7 @@ function formatChatContext(ctx: ChatContext): string {
   const blocks: string[] = [`ANALYSIS MODE: ${ctx.mode.toUpperCase()}`]
   if (verdictText) blocks.push(verdictText)
   if (referenceTable) blocks.push(referenceTable)
+  if (ctx.pluginEqText) blocks.push(ctx.pluginEqText)
   blocks.push(
     `VOCAL CHAIN (in routing order):\n${vocalChainText}`,
     `FULL FLP MIXER:\n${flpText}`,
